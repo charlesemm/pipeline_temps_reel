@@ -18,7 +18,9 @@
 
 SET 'table.local-time-zone' = 'UTC';
 -- Nom lisible dans l'UI Flink, utile pour la supervision (étape 5).
-SET 'pipeline.name' = 'kpi-prestations-continu';
+-- Couvre désormais les deux familles de KPI (prestations + ententes
+-- préalables) : un seul job, un seul état partagé (voir plus bas).
+SET 'pipeline.name' = 'kpi-continu';
 
 -- Debezium garantit une livraison « au moins une fois » : après un
 -- incident, sa tâche repart du dernier offset validé et RÉÉMET des
@@ -72,6 +74,72 @@ CREATE TABLE factures_src (
     'topic' = 'dprest-json.public.TB_FACTURES',
     'properties.bootstrap.servers' = 'kafka:9092',
     'properties.group.id' = 'flink-kpi-factures',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'debezium-json'
+);
+
+-- ── Source 3 : ententes préalables (en-tête de la demande) ───────
+-- ENTENTE_PREALABLE_DATE_DEBUT arrive en chaîne ISO 8601 avec 6
+-- décimales ('2026-09-11T16:28:58.871991Z') — contrairement aux DATE
+-- pures (entier, voir factures_src). Conversion en TIMESTAMP par
+-- troncature à la milliseconde, formule identique à l'étape 3
+-- (voir flink/sql/pipeline_kpi_hebdo.sql).
+CREATE TABLE ep_src (
+    `ENTENTE_PREALABLE_ID`          INT NOT NULL,
+    `TYPE_DEMANDE_CODE`             STRING,
+    `ENTENTE_PREALABLE_DATE_DEBUT`  STRING,
+    `event_time` AS TO_TIMESTAMP(
+        REPLACE(SUBSTRING(`ENTENTE_PREALABLE_DATE_DEBUT`, 1, 23), 'T', ' '), 'yyyy-MM-dd HH:mm:ss.SSS'
+    ),
+    PRIMARY KEY (`ENTENTE_PREALABLE_ID`) NOT ENFORCED
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'dprest-json.public.TB_ENTENTES_PREALABLES',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.group.id' = 'flink-kpi-ep',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'debezium-json'
+);
+
+-- ── Source 4 : statut de la demande ───────────────────────────────
+-- Clé réelle côté source : (ENTENTE_PREALABLE_ID, STATUT_CODE,
+-- STATUT_DATE_DEBUT) — une EP peut en théorie changer de statut
+-- plusieurs fois. Ici la clé Flink est réduite à ENTENTE_PREALABLE_ID
+-- seul, sous l'hypothèse H5 de docs/kpi.md (« statuts terminaux, un
+-- seul par EP ») : confirmé sur les données actuelles (400 EP, 400
+-- statuts, jamais plus d'un). Si cette hypothèse cessait d'être vraie,
+-- cette table garderait silencieusement le dernier statut écrit pour
+-- l'EP concernée — à surveiller si le générateur évolue.
+CREATE TABLE ep_statuts_src (
+    `ENTENTE_PREALABLE_ID`  INT NOT NULL,
+    `STATUT_CODE`           STRING,
+    `STATUT_DATE_DEBUT`     STRING,
+    `AGENT_CODE`            STRING,
+    `event_time` AS TO_TIMESTAMP(
+        REPLACE(SUBSTRING(`STATUT_DATE_DEBUT`, 1, 23), 'T', ' '), 'yyyy-MM-dd HH:mm:ss.SSS'
+    ),
+    PRIMARY KEY (`ENTENTE_PREALABLE_ID`) NOT ENFORCED
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'dprest-json.public.TB_ENTENTES_PREALABLES_STATUTS',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.group.id' = 'flink-kpi-ep-statuts',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'debezium-json'
+);
+
+-- ── Source 5 : actes médicaux liés à l'EP (montant engagé, KPI 22) ─
+-- Clé réelle et composite : plusieurs actes possibles par EP.
+CREATE TABLE ep_actes_src (
+    `ENTENTE_PREALABLE_ID`           INT NOT NULL,
+    `ACTE_MEDICAL_CODE`              STRING NOT NULL,
+    `ACTE_MEDICAL_MONTANT_CMU`       DOUBLE,
+    PRIMARY KEY (`ENTENTE_PREALABLE_ID`, `ACTE_MEDICAL_CODE`) NOT ENFORCED
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'dprest-json.public.TB_ENTENTES_PREALABLES_ACTES_MEDICAUX',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.group.id' = 'flink-kpi-ep-actes',
     'scan.startup.mode' = 'earliest-offset',
     'format' = 'debezium-json'
 );
@@ -167,6 +235,68 @@ CREATE TABLE kpi_prestations_assure_jour (
     'sink.parallelism' = '1'
 );
 
+-- ── Cible 6 : ententes préalables par jour, statut, type de demande ─
+-- KPI 16 à 19, 21, 22.
+CREATE TABLE kpi_ententes_prealables_jour (
+    jour                DATE NOT NULL,
+    statut_code         STRING NOT NULL,
+    type_demande_code   STRING NOT NULL,
+    nombre_ententes     BIGINT,
+    delai_moyen_jours   DECIMAL(10, 2),
+    montant_engage_cmu  DECIMAL(18, 2),
+    PRIMARY KEY (jour, statut_code, type_demande_code) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'kpi_ententes_prealables_jour',
+    'username' = 'dprest',
+    'password' = 'dprest_dev_2026',
+    'sink.parallelism' = '1'
+);
+
+-- ── Cible 7 : activité des praticiens-conseils (KPI 20) ───────────
+CREATE TABLE kpi_ententes_prealables_agent_jour (
+    jour             DATE NOT NULL,
+    agent_code       STRING NOT NULL,
+    statut_code      STRING NOT NULL,
+    nombre_ententes  BIGINT,
+    PRIMARY KEY (jour, agent_code, statut_code) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'kpi_ententes_prealables_agent_jour',
+    'username' = 'dprest',
+    'password' = 'dprest_dev_2026',
+    'sink.parallelism' = '1'
+);
+
+-- ── Montant engagé, pré-agrégé par EP avant jointure ──────────────
+-- Réduit le volume joint : une ligne par EP plutôt qu'une ligne par acte.
+CREATE VIEW ep_montant AS
+SELECT
+    `ENTENTE_PREALABLE_ID`,
+    SUM(`ACTE_MEDICAL_MONTANT_CMU`) AS montant_engage_cmu
+FROM ep_actes_src
+GROUP BY `ENTENTE_PREALABLE_ID`;
+
+-- ── Ententes enrichies : EP + statut (LEFT JOIN) + montant ────────
+-- LEFT JOIN sur le statut : une EP sans ligne de statut est une EP
+-- « sans réponse » (hypothèse H4 de docs/kpi.md), pas une ligne perdue.
+CREATE VIEW ep_enrichies AS
+SELECT
+    CAST(e.`event_time` AS DATE)                        AS jour,
+    COALESCE(s.`STATUT_CODE`, 'sans_reponse')            AS statut_code,
+    COALESCE(e.`TYPE_DEMANDE_CODE`, '(inconnu)')         AS type_demande_code,
+    s.`AGENT_CODE`                                       AS agent_code,
+    CASE WHEN s.`event_time` IS NOT NULL
+         THEN TIMESTAMPDIFF(DAY, e.`event_time`, s.`event_time`)
+    END                                                   AS delai_jours,
+    COALESCE(m.montant_engage_cmu, 0)                    AS montant_engage_cmu
+FROM ep_src AS e
+LEFT JOIN ep_statuts_src AS s ON e.`ENTENTE_PREALABLE_ID` = s.`ENTENTE_PREALABLE_ID`
+LEFT JOIN ep_montant AS m ON e.`ENTENTE_PREALABLE_ID` = m.`ENTENTE_PREALABLE_ID`
+WHERE e.`event_time` IS NOT NULL;
+
 -- ── Passages : lus directement sur les factures, sans jointure ────
 -- Une facture = un passage (hypothèse H6). Pas besoin des prestations :
 -- inutile de payer l'état de la jointure pour ce décompte.
@@ -201,10 +331,10 @@ FROM prestations_src AS p
 JOIN factures_src AS f ON p.`FACTURE_NUMERO` = f.`FACTURE_NUMERO`
 WHERE f.`jour_soins` IS NOT NULL;
 
--- Les cinq écritures partagent la même lecture des topics et la même
--- jointure : un seul job, un seul état, cinq cibles. Un job séparé
--- dupliquerait lecture, dédoublonnage et état de jointure — c'est ce
--- qui a saturé la mémoire le 2026-09-11 (voir docs/decisions.md).
+-- Les sept écritures partagent la même lecture des topics et le même
+-- état : un seul job. Un job séparé dupliquerait lecture, dédoublonnage
+-- et état de jointure — c'est ce qui a saturé la mémoire le 2026-09-11
+-- (voir docs/decisions.md).
 EXECUTE STATEMENT SET
 BEGIN
 
@@ -259,5 +389,26 @@ SELECT
     CAST(SUM(montant_depense) AS DECIMAL(18, 2))
 FROM prestations_enrichies
 GROUP BY jour, personne_uuid, centre_sante_code;
+
+INSERT INTO kpi_ententes_prealables_jour
+SELECT
+    jour,
+    statut_code,
+    type_demande_code,
+    COUNT(*)                                AS nombre_ententes,
+    CAST(AVG(delai_jours) AS DECIMAL(10, 2)) AS delai_moyen_jours,
+    CAST(SUM(montant_engage_cmu) AS DECIMAL(18, 2))
+FROM ep_enrichies
+GROUP BY jour, statut_code, type_demande_code;
+
+INSERT INTO kpi_ententes_prealables_agent_jour
+SELECT
+    jour,
+    agent_code,
+    statut_code,
+    COUNT(*) AS nombre_ententes
+FROM ep_enrichies
+WHERE agent_code IS NOT NULL
+GROUP BY jour, agent_code, statut_code;
 
 END;

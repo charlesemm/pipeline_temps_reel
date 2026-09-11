@@ -164,6 +164,11 @@ services:
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 2
         jobmanager.memory.process.size: 1024m
+        # Étape 5 : expose /metrics au format Prometheus sur le port 9249,
+        # lu par le service prometheus ci-dessous.
+        metrics.reporters: prom
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
     ports:
       # 8082, pas 8081 : déjà pris par schema-registry sur cette machine.
       - "8082:8081"
@@ -196,6 +201,64 @@ services:
         # (état en mémoire). La réduire de 40 % à 10 % rend ~230 Mo au
         # traitement sans consommer un octet de plus sur la machine.
         taskmanager.memory.managed.fraction: 0.1
+        # Étape 5 : même exportateur que le JobManager (débit,
+        # enregistrements traités, tas JVM du TaskManager).
+        metrics.reporters: prom
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+
+  # ── Étape 5 : Prometheus (collecte des métriques) ────────────────
+  prometheus:
+    image: docker.io/prom/prometheus:v2.53.1
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Pas de volume de données persistant : l'historique des métriques
+      # n'a pas besoin de survivre à un arrêt sur ce simulateur — seules
+      # les tables KPI de postgres-analytics doivent être durables.
+      - --storage.tsdb.retention.time=2d
+    ports:
+      - "9091:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ── Étape 5 : Grafana (tableaux de bord + alertes, public SGD) ────
+  grafana:
+    image: docker.io/grafana/grafana-oss:11.1.4
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      postgres-analytics:
+        condition: service_healthy
+    environment:
+      # Datasource « JSON API » : seul moyen simple d'afficher l'état des
+      # connecteurs Debezium (API REST de Kafka Connect), qui n'expose
+      # aucune métrique Prometheus native sur cette image.
+      GF_INSTALL_PLUGINS: yesoreyeram-infinity-datasource
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dprest_dev_2026}
+      # Dev/démo uniquement : pas d'inscription libre, mot de passe par
+      # défaut à changer avant toute exposition hors de cette machine
+      # (durci à l'étape 7).
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
 
 volumes:
   analytics_data:

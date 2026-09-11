@@ -1,0 +1,195 @@
+{
+  "title": "Pipeline DPREST — Supervision",
+  "uid": "pipeline-dprest",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "État général",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "Job Flink (kpi_continu)",
+      "id": 1,
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "flink_jobmanager_numRunningJobs", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "ARRÊTÉ", "color": "red" } } },
+            { "type": "range", "options": { "from": 1, "to": 999, "result": { "text": "RUNNING", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": { "textMode": "value", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "stat",
+      "title": "Redémarrages du job",
+      "id": 2,
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "flink_jobmanager_job_numRestarts{job_name=\"kpi_continu\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        }
+      },
+      "options": { "textMode": "value", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "stat",
+      "title": "Débit (événements/s, sources)",
+      "id": 3,
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(flink_taskmanager_job_task_operator_numRecordsInPerSecond{job_name=\"kpi_continu\", task_name=~\"Source.*\"})", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 1 } },
+      "options": { "textMode": "value", "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "type": "gauge",
+      "title": "Mémoire TaskManager (tas JVM)",
+      "id": 4,
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "100 * flink_taskmanager_Status_JVM_Memory_Heap_Used / flink_taskmanager_Status_JVM_Memory_Heap_Max", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 70 }, { "color": "red", "value": 90 }] }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Fraîcheur des KPI",
+      "id": 5,
+      "description": "Délai entre maintenant et la dernière ligne écrite dans kpi_prestations_jour. La métrique clé du mémoire : ce que le circuit manuel ne peut pas offrir.",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "postgres-analytics" },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT EXTRACT(EPOCH FROM (now() - MAX(maj_le))) AS fraicheur_s FROM kpi_prestations_jour",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s", "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 60 }, { "color": "red", "value": 300 }] }
+        }
+      },
+      "options": { "textMode": "value", "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "TaskManagers enregistrés",
+      "id": 6,
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "flink_jobmanager_numRegisteredTaskManagers", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": { "textMode": "value", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "row",
+      "title": "Debezium (capture des changements)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "collapsed": false
+    },
+    {
+      "type": "table",
+      "title": "État des connecteurs Debezium",
+      "id": 10,
+      "description": "Interroge directement l'API REST de Kafka Connect. RUNNING/RUNNING attendu pour le connecteur et sa tâche.",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "kafka-connect-api" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://kafka-connect:8083/connectors/dprest-postgres-source-json/status",
+          "root_selector": "",
+          "columns": [
+            { "selector": "name", "text": "Connecteur", "type": "string" },
+            { "selector": "connector.state", "text": "État connecteur", "type": "string" },
+            { "selector": "tasks.0.state", "text": "État tâche", "type": "string" }
+          ]
+        },
+        {
+          "refId": "B",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://kafka-connect:8083/connectors/dprest-postgres-source/status",
+          "root_selector": "",
+          "columns": [
+            { "selector": "name", "text": "Connecteur", "type": "string" },
+            { "selector": "connector.state", "text": "État connecteur", "type": "string" },
+            { "selector": "tasks.0.state", "text": "État tâche", "type": "string" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Historique",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 },
+      "id": 102,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Débit par opérateur source (événements/s)",
+      "id": 20,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "flink_taskmanager_job_task_operator_numRecordsInPerSecond{job_name=\"kpi_continu\", task_name=~\"Source.*\"}", "legendFormat": "{{task_name}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Mémoire TaskManager dans le temps",
+      "id": 21,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "flink_taskmanager_Status_JVM_Memory_Heap_Used", "legendFormat": "Utilisé", "refId": "A" },
+        { "expr": "flink_taskmanager_Status_JVM_Memory_Heap_Max", "legendFormat": "Maximum", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    }
+  ]
+}

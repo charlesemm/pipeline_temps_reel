@@ -1,0 +1,54 @@
+# Sources de données provisionnées automatiquement au démarrage de
+# Grafana — rien à cliquer dans l'interface, tout est versionné ici.
+
+apiVersion: 1
+
+datasources:
+  # Métriques Flink (job en cours, débit, mémoire JVM).
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  # KPI et fraîcheur des données — requêtes SQL directes sur la même
+  # base que celle utilisée pour les contrôles manuels
+  # (docs/guides/consulter_les_donnees.md). C'est la source de la
+  # métrique la plus importante du mémoire : le délai entre une
+  # écriture source et sa disponibilité en KPI.
+  - name: PostgreSQL analytique
+    uid: postgres-analytics
+    type: postgres
+    access: proxy
+    url: postgres-analytics:5432
+    database: dprest_analytics
+    user: dprest
+    secureJsonData:
+      # En clair comme ailleurs dans ce dépôt dev (docker-compose.yml,
+      # flink/sql/kpi_prestations.sql) : substitution de variable non
+      # fiable dans le provisioning Grafana selon les versions — mieux
+      # vaut une valeur explicite que silencieusement vide. Durci à
+      # l'étape 7 (secrets hors du dépôt).
+      password: dprest_dev_2026
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    editable: false
+
+  # État des connecteurs Debezium — Kafka Connect n'expose aucune
+  # métrique Prometheus native sur cette image ; son API REST donne
+  # directement l'état RUNNING/FAILED du connecteur et de sa tâche.
+  # Plugin communautaire installé via GF_INSTALL_PLUGINS (docker-compose.yml).
+  - name: Kafka Connect (JSON API)
+    uid: kafka-connect-api
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    jsonData:
+      # Restreint les requêtes de ce datasource à cette seule cible —
+      # évite qu'un tableau de bord interroge une URL arbitraire.
+      allowedHosts:
+        - http://kafka-connect:8083
+    editable: false

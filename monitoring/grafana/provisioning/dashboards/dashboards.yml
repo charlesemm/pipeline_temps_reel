@@ -1,0 +1,16 @@
+# Indique à Grafana où lire les tableaux de bord au format JSON
+# (monitoring/grafana/dashboards/), au lieu de les créer à la main
+# dans l'interface — tout est versionné et rejouable.
+
+apiVersion: 1
+
+providers:
+  - name: pipeline
+    orgId: 1
+    folder: "Pipeline DPREST"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

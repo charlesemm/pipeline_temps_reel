@@ -23,3 +23,10 @@ RUN curl -fSL -o /opt/flink/lib/flink-sql-connector-kafka-3.2.0-1.19.jar \
       https://repo.maven.apache.org/maven2/org/apache/flink/flink-connector-jdbc/3.2.0-1.19/flink-connector-jdbc-3.2.0-1.19.jar && \
     curl -fSL -o /opt/flink/lib/postgresql-42.7.3.jar \
       https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.3/postgresql-42.7.3.jar
+
+# Étape 5 — exportateur de métriques Prometheus, officiel Apache Flink,
+# aligné sur la version 1.19.1 du runtime (même principe de coordonnées
+# vérifiées que ci-dessus). Active un endpoint /metrics HTTP par
+# processus (JobManager et TaskManager), lu par Prometheus.
+RUN curl -fSL -o /opt/flink/lib/flink-metrics-prometheus-1.19.1.jar \
+      https://repo.maven.apache.org/maven2/org/apache/flink/flink-metrics-prometheus/1.19.1/flink-metrics-prometheus-1.19.1.jar

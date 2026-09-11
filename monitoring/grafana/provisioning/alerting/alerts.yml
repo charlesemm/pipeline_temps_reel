@@ -1,0 +1,190 @@
+# Règles d'alerte provisionnées — supervision du pipeline (public SGD).
+#
+# Volontairement limitées à 6 alertes correspondant chacune à un
+# incident réellement rencontré pendant le développement (voir
+# docs/decisions.md) : trop d'alertes tue l'alerte, surtout pour une
+# démonstration en soutenance.
+#
+# Chaque règle interroge directement la source la plus fiable pour le
+# signal concerné (Prometheus pour Flink, l'API REST de Kafka Connect
+# via Infinity pour Debezium, SQL direct pour la fraîcheur) plutôt que
+# de tout faire transiter par un exportateur générique.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: pipeline-dprest
+    folder: Pipeline DPREST
+    interval: 30s
+    rules:
+
+      - uid: alerte-job-flink-arrete
+        title: "Job Flink arrêté"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: critical }
+        annotations:
+          summary: "Le job kpi_continu n'est plus RUNNING."
+          description: "Plus aucun calcul de KPI n'est en cours — les tableaux de bord cessent de se mettre à jour. Resoumettre le job (docs/guides/demarrage_arret.md)."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: flink_jobmanager_numRunningJobs
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C
+
+      - uid: alerte-job-flink-redemarre
+        title: "Job Flink en boucle de redémarrage"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: warning }
+        annotations:
+          summary: "Le job kpi_continu a redémarré au moins une fois."
+          description: "Un redémarrage traduit une exception non rattrapée (souvent OutOfMemoryError sur ce projet — voir docs/decisions.md). Consulter l'onglet Exceptions de l'UI Flink."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: flink_jobmanager_job_numRestarts{job_name="kpi_continu"}
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+              refId: C
+
+      - uid: alerte-taskmanager-memoire-haute
+        title: "Mémoire TaskManager critique"
+        condition: C
+        for: 2m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: warning }
+        annotations:
+          summary: "Le tas JVM du TaskManager dépasse 90 %."
+          description: "Risque d'OutOfMemoryError (déjà rencontré le 2026-09-10, voir docs/decisions.md). Vérifier s'il faut réduire l'état en jeu ou augmenter taskmanager.memory.process.size."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: 100 * flink_taskmanager_Status_JVM_Memory_Heap_Used / flink_taskmanager_Status_JVM_Memory_Heap_Max
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [90] }
+              refId: C
+
+      - uid: alerte-fraicheur-kpi
+        title: "Fraîcheur des KPI dégradée"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: critical }
+        annotations:
+          summary: "Plus de 5 minutes sans nouvelle ligne dans kpi_prestations_jour."
+          description: "Si le simulateur tourne, le pipeline a décroché quelque part entre Debezium et le sink JDBC. C'est la métrique la plus visible du mémoire : à vérifier en priorité."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: postgres-analytics
+            model:
+              rawSql: "SELECT EXTRACT(EPOCH FROM (now() - MAX(maj_le))) AS fraicheur_s FROM kpi_prestations_jour"
+              format: table
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [300] }
+              refId: C
+
+      - uid: alerte-debezium-json-echec
+        title: "Connecteur Debezium (JSON) en échec"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: critical }
+        annotations:
+          summary: "dprest-postgres-source-json : connecteur ou tâche pas RUNNING."
+          description: "C'est le connecteur qui alimente Flink : sa panne arrête tout le pipeline en aval. Relancer la tâche (docs/guides/demarrage_arret.md, section connecteurs)."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: kafka-connect-api
+            model:
+              type: json
+              source: url
+              format: table
+              parser: backend
+              url: http://kafka-connect:8083/connectors/dprest-postgres-source-json/status
+              root_selector: ""
+              columns:
+                - { selector: "tasks.0.state", text: etat, type: string }
+              computed_columns:
+                - { selector: "etat == \"RUNNING\" ? 1 : 0", text: etat_ok }
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C
+
+      - uid: alerte-analytics-injoignable
+        title: "Base analytique injoignable"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: critical }
+        annotations:
+          summary: "postgres-analytics ne répond plus aux requêtes."
+          description: "Cible finale du sink JDBC Flink : si elle est injoignable, le job accumule des erreurs d'écriture. Vérifier l'état du conteneur."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: postgres-analytics
+            model:
+              rawSql: "SELECT 1 AS ok"
+              format: table
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C

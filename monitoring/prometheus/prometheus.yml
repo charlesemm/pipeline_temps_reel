@@ -1,0 +1,21 @@
+# Configuration Prometheus — étape 5 (supervision, public SGD).
+#
+# Ne collecte QUE ce que Flink expose nativement (métriques applicatives :
+# job en cours, débit, mémoire JVM). L'état des connecteurs Debezium et la
+# fraîcheur des KPI sont interrogés directement par Grafana (API REST et
+# SQL), pas via Prometheus — voir docs/decisions.md pour la justification
+# (éviter d'ajouter des exportateurs supplémentaires sur une machine
+# contrainte en RAM).
+
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: flink-jobmanager
+    static_configs:
+      - targets: ["flink-jobmanager:9249"]
+
+  - job_name: flink-taskmanager
+    static_configs:
+      - targets: ["flink-taskmanager:9249"]

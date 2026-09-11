@@ -42,14 +42,39 @@ JOIN "TB_FACTURES" f ON f."FACTURE_NUMERO" = p."FACTURE_NUMERO"
 GROUP BY 1 ORDER BY 1;
 
 \echo ''
-\echo '=== 5. Ententes prealables par statut (KPI 18) ==='
+\echo '=== 5. Ententes prealables par statut (KPI 18, 19) ==='
 SELECT
     s."STATUT_CODE"  AS statut,
     COUNT(*)         AS nombre,
-    ROUND(AVG(s."STATUT_DATE_DEBUT" - e."ENTENTE_PREALABLE_DATE_DEBUT"), 2) AS delai_moyen_jours
+    ROUND(AVG(FLOOR(EXTRACT(EPOCH FROM (s."STATUT_DATE_DEBUT" - e."ENTENTE_PREALABLE_DATE_DEBUT"))/86400)), 2) AS delai_moyen_jours_entiers
 FROM "TB_ENTENTES_PREALABLES_STATUTS" s
 JOIN "TB_ENTENTES_PREALABLES" e ON e."ENTENTE_PREALABLE_ID" = s."ENTENTE_PREALABLE_ID"
 GROUP BY 1 ORDER BY 2 DESC;
+
+\echo ''
+\echo '=== 14. EP sans reponse (KPI 17, hypothese H4) ==='
+SELECT COUNT(*) AS ep_sans_reponse
+FROM "TB_ENTENTES_PREALABLES" e
+WHERE NOT EXISTS (SELECT 1 FROM "TB_ENTENTES_PREALABLES_STATUTS" s WHERE s."ENTENTE_PREALABLE_ID" = e."ENTENTE_PREALABLE_ID");
+
+\echo ''
+\echo '=== 15. Montant engage par statut (KPI 22) ==='
+SELECT s."STATUT_CODE" AS statut, SUM(a."ACTE_MEDICAL_MONTANT_CMU") AS montant_engage_cmu
+FROM "TB_ENTENTES_PREALABLES_ACTES_MEDICAUX" a
+JOIN "TB_ENTENTES_PREALABLES_STATUTS" s ON s."ENTENTE_PREALABLE_ID" = a."ENTENTE_PREALABLE_ID"
+GROUP BY 1 ORDER BY 1;
+
+\echo ''
+\echo '=== 16. Activite par agent, hors validee_office (KPI 20) ==='
+SELECT COUNT(DISTINCT "AGENT_CODE") AS agents, COUNT(*) AS lignes
+FROM "TB_ENTENTES_PREALABLES_STATUTS"
+WHERE "AGENT_CODE" IS NOT NULL;
+
+\echo ''
+\echo '=== 17. EP par type de demande (KPI 21) ==='
+SELECT "TYPE_DEMANDE_CODE" AS type_demande, COUNT(*) AS nombre
+FROM "TB_ENTENTES_PREALABLES"
+GROUP BY 1 ORDER BY 1;
 
 \echo ''
 \echo '=== 11. Passages (factures) par jour (KPI 2/4) ==='

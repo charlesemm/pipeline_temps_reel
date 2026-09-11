@@ -100,3 +100,30 @@ SELECT
     md5(string_agg(centre_sante_code || ':' || personne_uuid || ':' || nombre_prestations, ','
         ORDER BY centre_sante_code, personne_uuid)) AS empreinte
 FROM v_top10_assures_par_centre;
+
+\echo ''
+\echo '=== 14. EP sans reponse (KPI 17, hypothese H4) ==='
+SELECT COALESCE(SUM(nombre_ententes), 0) AS ep_sans_reponse
+FROM kpi_ententes_prealables_jour
+WHERE statut_code = 'sans_reponse';
+
+\echo ''
+\echo '=== 15. Montant engage par statut (KPI 22) ==='
+SELECT statut_code, SUM(montant_engage_cmu) AS montant_engage_cmu
+FROM kpi_ententes_prealables_jour
+GROUP BY 1 ORDER BY 1;
+
+\echo ''
+\echo '=== 16. Activite par agent, hors validee_office (KPI 20) ==='
+SELECT COUNT(DISTINCT agent_code) AS agents, SUM(nombre_ententes) AS lignes
+FROM kpi_ententes_prealables_agent_jour;
+
+\echo ''
+\echo '=== 17. EP par type de demande (KPI 21) ==='
+SELECT type_demande_code, SUM(nombre_ententes) AS nombre
+FROM kpi_ententes_prealables_jour
+GROUP BY 1 ORDER BY 1;
+
+\echo ''
+\echo '=== 18. KPI mensuel certifie (mois clos uniquement) ==='
+SELECT * FROM v_kpi_ententes_prealables_mois ORDER BY mois, statut_code;
