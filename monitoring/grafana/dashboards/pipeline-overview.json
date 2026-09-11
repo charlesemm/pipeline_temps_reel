@@ -125,9 +125,9 @@
     },
     {
       "type": "table",
-      "title": "État des connecteurs Debezium",
+      "title": "État du connecteur Debezium",
       "id": 10,
-      "description": "Interroge directement l'API REST de Kafka Connect. RUNNING/RUNNING attendu pour le connecteur et sa tâche.",
+      "description": "Interroge directement l'API REST de Kafka Connect. RUNNING/RUNNING attendu pour le connecteur et sa tâche. Le connecteur Avro (dprest-postgres-source) a été retiré le 2026-09-11, non utilisé par Flink — voir docs/decisions.md.",
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "kafka-connect-api" },
       "targets": [
@@ -144,27 +144,81 @@
             { "selector": "connector.state", "text": "État connecteur", "type": "string" },
             { "selector": "tasks.0.state", "text": "État tâche", "type": "string" }
           ]
-        },
-        {
-          "refId": "B",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "http://kafka-connect:8083/connectors/dprest-postgres-source/status",
-          "root_selector": "",
-          "columns": [
-            { "selector": "name", "text": "Connecteur", "type": "string" },
-            { "selector": "connector.state", "text": "État connecteur", "type": "string" },
-            { "selector": "tasks.0.state", "text": "État tâche", "type": "string" }
-          ]
         }
       ]
     },
     {
+      "type": "stat",
+      "title": "Prestations traitées aujourd'hui",
+      "id": 11,
+      "description": "Volume du jour, tables kpi_*_jour. Indicateur d'activité, complémentaire à la fraîcheur : une fraîcheur dégradée avec un volume qui continue de monter est différente d'un simulateur simplement inactif.",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 6 },
+      "datasource": { "type": "postgres", "uid": "postgres-analytics" },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT COALESCE(SUM(nombre_prestations), 0) AS prestations_du_jour FROM kpi_prestations_jour WHERE jour = CURRENT_DATE",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 0 } },
+      "options": { "textMode": "value", "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "Ententes préalables traitées aujourd'hui",
+      "id": 12,
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 6 },
+      "datasource": { "type": "postgres", "uid": "postgres-analytics" },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT COALESCE(SUM(nombre_ententes), 0) AS ep_du_jour FROM kpi_ententes_prealables_jour WHERE jour = CURRENT_DATE",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 0 } },
+      "options": { "textMode": "value", "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "row",
+      "title": "Base source (simulateur_V5)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 },
+      "id": 103,
+      "collapsed": false
+    },
+    {
+      "type": "table",
+      "title": "Retard des slots de réplication logique",
+      "id": 13,
+      "description": "Un slot qui n'avance plus retient les journaux de transactions PostgreSQL indéfiniment — risque de saturation du disque. debezium_dprest_json est notre slot (retard normal : quelques Mo). Les slots cnam_* ne sont pas utilisés par ce pipeline — constatés en croissance continue le 2026-09-11 (3,7 Go puis 6 Go / 3 Go en quelques heures) : à faire supprimer par leur propriétaire si inutilisés, ou à surveiller sinon.",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "postgres", "uid": "postgres-source" },
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT slot_name AS slot, active, ROUND(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) / 1048576.0, 1) AS retard_mo FROM pg_replication_slots ORDER BY retard_mo DESC NULLS LAST",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "retard_mo" },
+            "properties": [
+              { "id": "unit", "value": "decmbytes" },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 500 }, { "color": "red", "value": 2000 }] } },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "type": "row",
       "title": "Historique",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
       "id": 102,
       "collapsed": false
     },
@@ -172,7 +226,7 @@
       "type": "timeseries",
       "title": "Débit par opérateur source (événements/s)",
       "id": 20,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "expr": "flink_taskmanager_job_task_operator_numRecordsInPerSecond{job_name=\"kpi_continu\", task_name=~\"Source.*\"}", "legendFormat": "{{task_name}}", "refId": "A" }
@@ -183,7 +237,7 @@
       "type": "timeseries",
       "title": "Mémoire TaskManager dans le temps",
       "id": 21,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "expr": "flink_taskmanager_Status_JVM_Memory_Heap_Used", "legendFormat": "Utilisé", "refId": "A" },

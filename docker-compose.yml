@@ -241,7 +241,19 @@ services:
       # Datasource « JSON API » : seul moyen simple d'afficher l'état des
       # connecteurs Debezium (API REST de Kafka Connect), qui n'expose
       # aucune métrique Prometheus native sur cette image.
-      GF_INSTALL_PLUGINS: yesoreyeram-infinity-datasource
+      # Version épinglée à 3.7.1 (pas "latest") : la 4.0.0 exige Grafana
+      # >= 11.6.11, incompatible avec grafana-oss:11.1.4 utilisé ici
+      # (panneau en erreur "404 react/jsx-runtime" au chargement — constaté
+      # le 2026-09-11, voir docs/decisions.md). 3.7.1 est la dernière
+      # version compatible (>= 10.4.8 requis).
+      #
+      # Syntaxe "id@version" NON supportée par le script de démarrage de
+      # cette image (il ne scinde que sur la virgule, puis passe la
+      # chaîne entière comme identifiant de plugin -> "404: Plugin not
+      # found", conteneur en boucle de redémarrage). La seule façon de
+      # figer une version est l'URL directe de téléchargement, au format
+      # "<url>;<dossier_installation>" — voir /run.sh dans l'image.
+      GF_INSTALL_PLUGINS: "https://grafana.com/api/plugins/yesoreyeram-infinity-datasource/versions/3.7.1/download;yesoreyeram-infinity-datasource"
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dprest_dev_2026}
       # Dev/démo uniquement : pas d'inscription libre, mot de passe par
@@ -251,6 +263,14 @@ services:
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      # Réseau du projet + réseau de simulateur_V5 : Grafana doit joindre
+      # `postgres` en direct pour surveiller le retard des slots de
+      # réplication (KPI 2026-09-11 : deux slots orphelins, hors de ce
+      # projet, ont atteint 6 Go / 3 Go de retard — risque de saturation
+      # disque sur la VM).
+      default: {}
+      simulateur_v5_net: {}
     ports:
       - "3000:3000"
     healthcheck:

@@ -38,6 +38,26 @@ datasources:
       timescaledb: false
     editable: false
 
+  # Base SOURCE (simulateur_V5) — accès direct, en lecture, uniquement
+  # pour surveiller le retard des slots de réplication logique
+  # (pg_replication_slots). Ce n'est PAS une entorse au principe « la
+  # source n'est jamais interrogée par les outils de restitution » : ici
+  # on lit une vue système de supervision, jamais les données métier.
+  - name: PostgreSQL source (simulateur_V5)
+    uid: postgres-source
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: echo_db
+    user: echo
+    secureJsonData:
+      password: Azerty2001
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    editable: false
+
   # État des connecteurs Debezium — Kafka Connect n'expose aucune
   # métrique Prometheus native sur cette image ; son API REST donne
   # directement l'état RUNNING/FAILED du connecteur et de sa tâche.

@@ -13,14 +13,25 @@
     See docs/guides/demarrage_arret.md.
 #>
 
-$ErrorActionPreference = "Stop"
+# PAS de "$ErrorActionPreference = 'Stop'" ici : podman/podman-compose écrit
+# des messages d'information tout à fait normaux sur le flux d'erreur (ex.
+# "Executing external compose provider..."). Sous PowerShell 5.1, avec
+# $ErrorActionPreference = "Stop", ce genre de sortie stderr anodine est
+# transformée en erreur fatale (NativeCommandError) qui interrompt le
+# script en plein milieu — vécu concrètement le 2026-09-11 : le script
+# s'arrêtait après l'étape 2, avant même d'atteindre la resoumission du
+# job Flink. Les échecs réels sont détectés explicitement plus bas via
+# $LASTEXITCODE.
+$ErrorActionPreference = "Continue"
 
 $PipelineDir   = "C:\Users\charles.nguessan\Documents\pipeline_temps_reel"
 $SimulatorDir  = "C:\Users\charles.nguessan\OneDrive - IPSCNAM\Documents\simulateur_V5"
 $FlinkJob      = "flink/sql/kpi_prestations.sql"
 $JobManager    = "pipeline_temps_reel-flink-jobmanager-1"
 $KafkaConnect  = "pipeline_temps_reel-kafka-connect-1"
-$Connectors    = @("dprest-postgres-source-json", "dprest-postgres-source")
+# Un seul connecteur : la version Avro (dprest-postgres-source) a été
+# retirée le 2026-09-11, non utilisée par Flink — voir docs/decisions.md.
+$Connectors    = @("dprest-postgres-source-json")
 
 function Write-Step($message) {
     Write-Host ""
@@ -54,20 +65,33 @@ if ($machineState -match "true") {
 # -- 2. Base source (simulateur_V5) -------------------------------------
 Write-Step "Demarrage de simulateur_V5 (base source)"
 Push-Location $SimulatorDir
-podman compose start
-Pop-Location
+try {
+    podman compose start
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "    ATTENTION : 'podman compose start' a retourne le code $LASTEXITCODE" -ForegroundColor Yellow
+        Write-Host "    (souvent sans gravite : simple message sur stderr. On continue.)" -ForegroundColor Yellow
+    }
+} finally {
+    Pop-Location
+}
 Wait-Healthy "simulateur_v5-postgres-1" | Out-Null
 
 # -- 3. Pipeline --------------------------------------------------------
 Write-Step "Demarrage du pipeline (Kafka, Schema Registry, Connect, Flink, PostgreSQL analytique)"
 Push-Location $PipelineDir
 podman compose start
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "    ATTENTION : 'podman compose start' a retourne le code $LASTEXITCODE" -ForegroundColor Yellow
+    Write-Host "    (souvent sans gravite : simple message sur stderr. On continue.)" -ForegroundColor Yellow
+}
 
 Wait-Healthy "pipeline_temps_reel-kafka-1"              | Out-Null
 Wait-Healthy "pipeline_temps_reel-schema-registry-1"    | Out-Null
 Wait-Healthy "pipeline_temps_reel-kafka-connect-1"      | Out-Null
 Wait-Healthy "pipeline_temps_reel-postgres-analytics-1" | Out-Null
 Wait-Healthy "pipeline_temps_reel-flink-jobmanager-1"   | Out-Null
+Wait-Healthy "pipeline_temps_reel-prometheus-1"         | Out-Null
+Wait-Healthy "pipeline_temps_reel-grafana-1"            | Out-Null
 
 # -- 4. Connecteurs Debezium --------------------------------------------
 # Une tache part en FAILED si la base source a redemarre apres Kafka
@@ -131,6 +155,8 @@ Write-Host "=======================================================" -Foreground
 Write-Host ""
 Write-Host "  Dashboard simulateur   http://${vmIp}:8000"
 Write-Host "  Flink                  http://${vmIp}:8082"
+Write-Host "  Grafana (supervision)  http://${vmIp}:3000   (admin / dprest_dev_2026)"
+Write-Host "  Prometheus             http://${vmIp}:9091"
 Write-Host "  AKHQ (Kafka)           http://${vmIp}:8085"
 Write-Host "  Base KPI (pgAdmin)     ${vmIp}:15433  /  dprest_analytics"
 Write-Host ""

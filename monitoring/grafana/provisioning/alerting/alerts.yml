@@ -188,3 +188,30 @@ groups:
               conditions:
                 - evaluator: { type: lt, params: [1] }
               refId: C
+
+      - uid: alerte-slot-replication-retard
+        title: "Slot de réplication PostgreSQL en fort retard"
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: warning }
+        annotations:
+          summary: "Au moins un slot de réplication accumule plus de 2 Go de retard."
+          description: "Un slot qui n'avance plus retient les journaux de transactions indéfiniment sur simulateur_V5 — risque de saturation du disque de la VM. Constaté le 2026-09-11 sur des slots cnam_* non utilisés par ce pipeline (6 Go / 3 Go). Voir le panneau « Retard des slots de réplication logique »."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: postgres-source
+            model:
+              rawSql: "SELECT MAX(ROUND(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) / 1048576.0, 0)) AS retard_max_mo FROM pg_replication_slots"
+              format: table
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [2000] }
+              refId: C
