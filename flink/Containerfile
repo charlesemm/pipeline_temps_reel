@@ -1,0 +1,25 @@
+# Image Flink avec les connecteurs nécessaires pour lire les topics
+# Debezium (format Avro + enveloppe CDC) depuis Kafka.
+#
+# Coordonnées vérifiées sur Maven Central avant écriture (voir
+# docs/decisions.md) — contrairement au connecteur Debezium (étape 2),
+# pas de piège de compatibilité Java ici : ce sont des artefacts publiés
+# par Apache Flink lui-même, alignés sur la version de Flink utilisée.
+FROM docker.io/library/flink:1.19.1-java17
+
+# flink-sql-avro-confluent-registry : 1.19.1 a un bug de résolution de
+# schéma Avro sur les enveloppes Debezium où "before" et "after"
+# référencent le même type nommé "Value" (AvroTypeException "Found
+# ...Value, expecting union"), rencontré en pratique à l'étape 3.
+# La série 2.x (découplée de Flink) cible en réalité un runtime Flink
+# 2.x, incompatible avec notre 1.19.1 (ClassNotFoundException sur une
+# classe de l'API table interne) — testée et écartée. 1.19.3 (dernier
+# correctif encore dans la série alignée sur Flink 1.19) à la place.
+RUN curl -fSL -o /opt/flink/lib/flink-sql-connector-kafka-3.2.0-1.19.jar \
+      https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-connector-kafka/3.2.0-1.19/flink-sql-connector-kafka-3.2.0-1.19.jar && \
+    curl -fSL -o /opt/flink/lib/flink-sql-avro-confluent-registry-1.19.3.jar \
+      https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-avro-confluent-registry/1.19.3/flink-sql-avro-confluent-registry-1.19.3.jar && \
+    curl -fSL -o /opt/flink/lib/flink-connector-jdbc-3.2.0-1.19.jar \
+      https://repo.maven.apache.org/maven2/org/apache/flink/flink-connector-jdbc/3.2.0-1.19/flink-connector-jdbc-3.2.0-1.19.jar && \
+    curl -fSL -o /opt/flink/lib/postgresql-42.7.3.jar \
+      https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.3/postgresql-42.7.3.jar

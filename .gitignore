@@ -1,0 +1,28 @@
+# Secrets et configuration locale
+.env
+*.env.local
+
+# Données et volumes
+data/
+*.dump
+*.sql.gz
+
+# Environnements Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Exports et sauvegardes
+*.xlsx
+*.csv.bak
+*.backup
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+NUL
+
+docs/

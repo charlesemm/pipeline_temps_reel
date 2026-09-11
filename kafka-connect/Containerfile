@@ -1,0 +1,19 @@
+# Image Kafka Connect avec le connecteur Debezium PostgreSQL et le
+# convertisseur Avro (Schema Registry), installés via confluent-hub —
+# aucun des deux n'est présent dans l'image de base.
+#
+# Image de base "cp-kafka-connect-base" : sous licence Confluent
+# Community License (gratuite, code source disponible, mais pas
+# OSI-approved). Alternative 100% Apache 2.0 envisageable si la
+# contrainte "open source" de CLAUDE.md doit être stricte : Karapace
+# (Aiven) pour le Schema Registry + une image Kafka Connect nue avec le
+# plugin Debezium copié manuellement. Voir docs/decisions.md.
+FROM docker.io/confluentinc/cp-kafka-connect-base:7.6.1
+
+# Version fixée à 2.5.4 : c'est la dernière version du connecteur encore
+# compatible avec le JDK 11 embarqué dans cp-kafka-connect-base:7.6.1.
+# À partir de 3.0.x, Debezium exige Java 17 — le plugin se charge alors
+# silencieusement en échec (UnsupportedClassVersionError dans les logs,
+# absent de /connector-plugins), sans erreur au moment du build.
+RUN confluent-hub install --no-prompt debezium/debezium-connector-postgresql:2.5.4 && \
+    confluent-hub install --no-prompt confluentinc/kafka-connect-avro-converter:latest

@@ -1,0 +1,13 @@
+# Config AKHQ — interface web pour voir Kafka, Schema Registry et Kafka
+# Connect en un seul endroit (topics, messages, consommateurs, schémas
+# Avro, statut des connecteurs Debezium).
+akhq:
+  connections:
+    pipeline-cluster:
+      properties:
+        bootstrap.servers: "kafka:9092"
+      schema-registry:
+        url: "http://schema-registry:8081"
+      connect:
+        - name: "kafka-connect"
+          url: "http://kafka-connect:8083"

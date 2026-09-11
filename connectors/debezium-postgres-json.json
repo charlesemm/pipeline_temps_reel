@@ -1,0 +1,28 @@
+{
+  "name": "dprest-postgres-source-json",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "echo",
+    "database.password": "Azerty2001",
+    "database.dbname": "echo_db",
+
+    "topic.prefix": "dprest-json",
+    "plugin.name": "pgoutput",
+    "publication.autocreate.mode": "filtered",
+    "publication.name": "dbz_publication_json",
+    "slot.name": "debezium_dprest_json",
+
+    "table.include.list": "public.TB_FACTURES,public.TB_FACTURES_PRESTATIONS,public.TB_FACTURES_REJETS,public.TB_FACTURES_STATUTS,public.TB_ENTENTES_PREALABLES,public.TB_ENTENTES_PREALABLES_STATUTS,public.TB_ENTENTES_PREALABLES_ACTES_MEDICAUX,public.TB_ENTENTES_PREALABLES_PRESTATIONS",
+
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "decimal.handling.mode": "double",
+
+    "snapshot.mode": "initial",
+    "heartbeat.interval.ms": "10000"
+  }
+}

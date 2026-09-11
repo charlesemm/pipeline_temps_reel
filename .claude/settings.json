@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(podman logs *)",
+      "Bash(podman compose *)",
+      "Bash(podman machine *)",
+      "Bash(podman ps *)"
+    ]
+  }
+}

@@ -1,0 +1,211 @@
+# ═══════════════════════════════════════════════════════════════
+# Pipeline temps réel CNAM/DPREST — Debezium → Kafka → Flink →
+# PostgreSQL → Grafana / Superset.
+#
+# Les services sont ajoutés progressivement, une étape du mémoire à
+# la fois (voir docs/PLAN.md). Ne rien démarrer en permanence — la
+# stack se lance pour une session de travail puis s'arrête
+# (`podman compose down`).
+#
+# La base source n'est PAS définie ici : elle appartient au projet
+# simulateur_V5, déjà déployé séparément. Ce compose la rejoint via
+# le réseau externe `simulateur_v5_net` (voir docs/decisions.md).
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  # ── Étape 2 : Kafka (KRaft, nœud unique combiné broker+contrôleur) ──
+  kafka:
+    image: docker.io/apache/kafka:3.7.0
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Nœud unique : pas de sens à répliquer sur soi-même, et ça évite
+      # des erreurs de démarrage (facteur de réplication > nombre de brokers).
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      CLUSTER_ID: "cGlwZWxpbmUtdGVtcHMtcmVlbA=="
+      # Tas JVM réduit : on est sur une machine à 6 Go RAM au total pour
+      # toute la stack (voir docs/decisions.md, étape 0).
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+    ports:
+      # Port hôte pour inspecter Kafka depuis Windows (kcat, etc.) sans
+      # entrer dans le réseau Podman. PLAINTEXT (interne, kafka:9092)
+      # reste le seul écouteur utilisé par les autres conteneurs.
+      - "29092:29092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # ── Étape 2 : Schema Registry (contrat de schéma Avro) ──
+  schema-registry:
+    image: docker.io/confluentinc/cp-schema-registry:7.6.1
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx256m -Xms256m"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/subjects >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  # ── Étape 2 : Kafka Connect + Debezium (CDC PostgreSQL) ──
+  kafka-connect:
+    build:
+      context: ./kafka-connect
+      dockerfile: Containerfile
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_GROUP_ID: pipeline-connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+      CONNECT_HEAP_OPTS: "-Xmx512m -Xms512m"
+    ports:
+      - "8083:8083"
+    networks:
+      # Réseau du projet + réseau partagé avec simulateur_V5 : c'est le
+      # seul service qui a besoin d'atteindre son PostgreSQL directement.
+      default: {}
+      simulateur_v5_net: {}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  # ── Outillage (facultatif) : interface web pour voir Kafka, Schema
+  # Registry et Kafka Connect sans passer par la ligne de commande. ──
+  akhq:
+    image: docker.io/tchiotludo/akhq:0.24.0
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      JAVA_OPTS: "-Xmx256m -Xms256m"
+    volumes:
+      - ./akhq/application.yml:/app/application.yml:ro
+    ports:
+      - "8085:8080"
+
+  # ── Étape 4 : base analytique cible (KPI) ──
+  # Instance distincte de la base source de simulateur_V5 : c'est le
+  # principe même de l'architecture (la source n'est jamais interrogée
+  # par les outils de restitution). Les scripts de sql/analytics/ sont
+  # appliqués automatiquement à la création du volume.
+  postgres-analytics:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dprest_analytics
+      POSTGRES_USER: dprest
+      POSTGRES_PASSWORD: ${ANALYTICS_PASSWORD:-dprest_dev_2026}
+    volumes:
+      - analytics_data:/var/lib/postgresql/data
+      - ./sql/analytics:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Publié pour permettre l'inspection depuis Windows et la
+      # connexion de Superset/Grafana aux étapes 5 et 6.
+      # 15433 et non 5433 : ce dernier n'était pas redirigé par Podman
+      # sur ce poste (probable conflit avec l'installation PostgreSQL
+      # native de Windows, qui occupe la plage 5432-5433).
+      - "15433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dprest -d dprest_analytics"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Étape 3 : Flink (agrégations, fenêtres, contrôles qualité) ──
+  flink-jobmanager:
+    build:
+      context: ./flink
+      dockerfile: Containerfile
+    command: jobmanager
+    restart: unless-stopped
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        jobmanager.memory.process.size: 1024m
+    ports:
+      # 8082, pas 8081 : déjà pris par schema-registry sur cette machine.
+      - "8082:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/overview >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  flink-taskmanager:
+    build:
+      context: ./flink
+      dockerfile: Containerfile
+    command: taskmanager
+    restart: unless-stopped
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        # 1024m ne laissait que ~25 Mo de tas applicatif (le reste part en
+        # metaspace, overhead JVM et mémoire managée) : insuffisant pour la
+        # jointure de l'étape 4, qui garde les deux flux en état
+        # -> OutOfMemoryError. Voir docs/decisions.md.
+        taskmanager.memory.process.size: 1536m
+        # La mémoire « managée » sert surtout à RocksDB, non utilisé ici
+        # (état en mémoire). La réduire de 40 % à 10 % rend ~230 Mo au
+        # traitement sans consommer un octet de plus sur la machine.
+        taskmanager.memory.managed.fraction: 0.1
+
+volumes:
+  analytics_data:
+
+networks:
+  default:
+    name: pipeline_temps_reel_net
+  # Réseau du projet simulateur_V5 (créé à l'étape 1 par
+  # `podman network create simulateur_v5_net`). Ce compose le rejoint,
+  # ne le crée pas (external: true).
+  simulateur_v5_net:
+    external: true
+    
