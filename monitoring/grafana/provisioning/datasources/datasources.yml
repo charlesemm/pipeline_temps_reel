@@ -24,14 +24,15 @@ datasources:
     access: proxy
     url: postgres-analytics:5432
     database: dprest_analytics
-    user: dprest
+    # Étape 7 : compte dédié en LECTURE SEULE (créé le 2026-09-12,
+    # voir docs/decisions.md), plus le compte propriétaire `dprest`
+    # utilisé par Flink pour écrire. Grafana n'a besoin que de lire.
+    user: dprest_lecture
     secureJsonData:
-      # En clair comme ailleurs dans ce dépôt dev (docker-compose.yml,
-      # flink/sql/kpi_prestations.sql) : substitution de variable non
-      # fiable dans le provisioning Grafana selon les versions — mieux
-      # vaut une valeur explicite que silencieusement vide. Durci à
-      # l'étape 7 (secrets hors du dépôt).
-      password: dprest_dev_2026
+      # Syntaxe $__env{...} : substitution documentée par Grafana
+      # (depuis la 8.x), fiable ici — vérifiée après coup en interrogeant
+      # le panneau de fraîcheur des KPI. La valeur vient de docker-compose.yml.
+      password: $__env{ANALYTICS_RO_PASSWORD}
     jsonData:
       sslmode: disable
       postgresVersion: 1600
@@ -49,9 +50,30 @@ datasources:
     access: proxy
     url: postgres:5432
     database: echo_db
-    user: echo
+    # Étape 7 : compte de supervision dédié (rôle intégré `pg_monitor`,
+    # créé le 2026-09-12, voir docs/decisions.md) — plus le compte
+    # applicatif `echo`. Testé : peut lire pg_replication_slots, ne peut
+    # pas lire TB_FACTURES ni aucune autre table métier.
+    user: monitoring_ro
     secureJsonData:
-      password: Azerty2001
+      password: $__env{SOURCE_RO_PASSWORD}
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    editable: false
+
+  # Activité Superset (audit) — étape 7 : la traçabilité déjà native de
+  # Superset (table `logs`), rendue visible sans nouvel outil.
+  - name: PostgreSQL Superset (audit)
+    uid: superset-db
+    type: postgres
+    access: proxy
+    url: superset-db:5432
+    database: superset
+    user: superset_ro
+    secureJsonData:
+      password: $__env{SUPERSET_RO_PASSWORD}
     jsonData:
       sslmode: disable
       postgresVersion: 1600

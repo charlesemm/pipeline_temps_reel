@@ -24,7 +24,7 @@
 # $LASTEXITCODE.
 $ErrorActionPreference = "Continue"
 
-$PipelineDir   = "C:\Users\charles.nguessan\Documents\pipeline_temps_reel"
+$PipelineDir   = "C:\Users\charles.nguessan\OneDrive - IPSCNAM\Documents\pipeline_temps_reel"
 $SimulatorDir  = "C:\Users\charles.nguessan\OneDrive - IPSCNAM\Documents\simulateur_V5"
 $FlinkJob      = "flink/sql/kpi_prestations.sql"
 $JobManager    = "pipeline_temps_reel-flink-jobmanager-1"
@@ -32,6 +32,17 @@ $KafkaConnect  = "pipeline_temps_reel-kafka-connect-1"
 # Un seul connecteur : la version Avro (dprest-postgres-source) a été
 # retirée le 2026-09-11, non utilisée par Flink — voir docs/decisions.md.
 $Connectors    = @("dprest-postgres-source-json")
+
+# Étape 7 : charge .env (non versionné) dans des variables PowerShell —
+# nécessaire pour injecter FLINK_WRITER_PASSWORD dans le job Flink au moment
+# de sa soumission, sans jamais l'écrire dans flink/sql/kpi_prestations.sql
+# (voir docs/decisions.md).
+$EnvVars = @{}
+Get-Content "$PipelineDir\.env" -Encoding UTF8 | ForEach-Object {
+    if ($_ -match '^\s*#' -or $_ -match '^\s*$') { return }
+    $parts = $_.Split('=', 2)
+    if ($parts.Count -eq 2) { $EnvVars[$parts[0].Trim()] = $parts[1].Trim() }
+}
 
 function Write-Step($message) {
     Write-Host ""
@@ -92,6 +103,16 @@ Wait-Healthy "pipeline_temps_reel-postgres-analytics-1" | Out-Null
 Wait-Healthy "pipeline_temps_reel-flink-jobmanager-1"   | Out-Null
 Wait-Healthy "pipeline_temps_reel-prometheus-1"         | Out-Null
 Wait-Healthy "pipeline_temps_reel-grafana-1"            | Out-Null
+Wait-Healthy "pipeline_temps_reel-superset-db-1"        | Out-Null
+Wait-Healthy "pipeline_temps_reel-superset-redis-1"     | Out-Null
+Wait-Healthy "pipeline_temps_reel-superset-1"           | Out-Null
+Wait-Healthy "pipeline_temps_reel-reverse-proxy-1"      | Out-Null
+
+# Grafana n'a pas de volume persistant : le mot de passe admin défini
+# par variable d'environnement ne s'applique qu'a la toute premiere
+# creation de sa base -> reinitialise systematiquement pour eviter la
+# surprise "Invalid username or password" apres un redemarrage complet.
+podman exec pipeline_temps_reel-grafana-1 grafana-cli admin reset-admin-password $($EnvVars['GRAFANA_ADMIN_PASSWORD']) 2>&1 | Out-Null
 
 # -- 4. Connecteurs Debezium --------------------------------------------
 # Une tache part en FAILED si la base source a redemarre apres Kafka
@@ -125,6 +146,12 @@ if ($jobs -match '"status":"RUNNING"') {
 } else {
     Write-Host "    Aucun job actif : soumission de $FlinkJob"
     podman cp $FlinkJob "${JobManager}:/tmp/kpi_prestations.sql"
+    # Étape 7 : le fichier versionné ne contient que le jeton
+    # __FLINK_WRITER_PASSWORD__ ; la vraie valeur (depuis .env) est
+    # injectée ici, dans la copie temporaire à l'intérieur du
+    # conteneur — jamais écrite sur disque en clair côté hôte ni dans Git.
+    podman exec $JobManager sed -i "s/__FLINK_WRITER_PASSWORD__/$($EnvVars['FLINK_WRITER_PASSWORD'])/g" /tmp/kpi_prestations.sql
+    podman exec $JobManager sed -i "s/__FLINK_KAFKA_PASSWORD__/$($EnvVars['KAFKA_FLINK_PASSWORD'])/g" /tmp/kpi_prestations.sql
     podman exec $JobManager ./bin/sql-client.sh -f /tmp/kpi_prestations.sql
 
     # Un job mal configure echoue dans les 30 a 60 premieres secondes :
@@ -155,7 +182,9 @@ Write-Host "=======================================================" -Foreground
 Write-Host ""
 Write-Host "  Dashboard simulateur   http://${vmIp}:8000"
 Write-Host "  Flink                  http://${vmIp}:8082"
-Write-Host "  Grafana (supervision)  http://${vmIp}:3000   (admin / dprest_dev_2026)"
+Write-Host "  Grafana (supervision)  https://${vmIp}:3443  (admin / voir .env GRAFANA_ADMIN_PASSWORD)"
+Write-Host "  Superset (DPREST)      https://${vmIp}:8443  (identifiants dans .env ; compte 'dprest' en lecture seule)"
+Write-Host "  (certificat auto-signe : le navigateur affichera un avertissement, normal - voir docs/guides/etape7_securite.md)"
 Write-Host "  Prometheus             http://${vmIp}:9091"
 Write-Host "  AKHQ (Kafka)           http://${vmIp}:8085"
 Write-Host "  Base KPI (pgAdmin)     ${vmIp}:15433  /  dprest_analytics"

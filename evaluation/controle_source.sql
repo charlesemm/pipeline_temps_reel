@@ -43,10 +43,11 @@ GROUP BY 1 ORDER BY 1;
 
 \echo ''
 \echo '=== 5. Ententes prealables par statut (KPI 18, 19) ==='
+\echo '(delai en HEURES pleines depuis le 2026-09-17 - voir sql/analytics/007_kpi_ep_delai_heures.sql)'
 SELECT
     s."STATUT_CODE"  AS statut,
     COUNT(*)         AS nombre,
-    ROUND(AVG(FLOOR(EXTRACT(EPOCH FROM (s."STATUT_DATE_DEBUT" - e."ENTENTE_PREALABLE_DATE_DEBUT"))/86400)), 2) AS delai_moyen_jours_entiers
+    ROUND(AVG(FLOOR(EXTRACT(EPOCH FROM (s."STATUT_DATE_DEBUT" - e."ENTENTE_PREALABLE_DATE_DEBUT"))/3600)), 2) AS delai_moyen_heures_entieres
 FROM "TB_ENTENTES_PREALABLES_STATUTS" s
 JOIN "TB_ENTENTES_PREALABLES" e ON e."ENTENTE_PREALABLE_ID" = s."ENTENTE_PREALABLE_ID"
 GROUP BY 1 ORDER BY 2 DESC;

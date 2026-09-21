@@ -1,0 +1,48 @@
+# Étape 5/7 (supervision) — métriques Kafka exposées au format Prometheus
+# via l'agent JMX, lu par le service `prometheus` (voir monitoring/prometheus/prometheus.yml).
+#
+# Volontairement limité aux métriques qui répondent à des questions
+# concrètes pour ce mémoire, pas à toutes les MBeans disponibles :
+# - le broker suit-il le débit du pipeline ? (BytesIn/Out, MessagesIn)
+# - un topic grossit-il de façon anormale ? (taille par topic/partition)
+# - le contrôleur KRaft est-il actif ? (nœud unique, mais utile pour
+#   détecter un broker qui perdrait son rôle de contrôleur)
+lowercaseOutputName: true
+
+rules:
+  # Débit global du broker (toutes rubriques confondues).
+  - pattern: 'kafka.server<type=BrokerTopicMetrics, name=(BytesInPerSec|BytesOutPerSec|MessagesInPerSec)><>OneMinuteRate'
+    name: kafka_server_brokertopicmetrics_$1
+    type: GAUGE
+
+  # Même métrique, ventilée par topic — répond à "quel topic pousse le
+  # plus de volume en ce moment", utile pour repérer l'un de nos deux
+  # flux CDC (dprest-json.public.TB_FACTURES / TB_FACTURES_PRESTATIONS).
+  - pattern: 'kafka.server<type=BrokerTopicMetrics, name=(BytesInPerSec|BytesOutPerSec|MessagesInPerSec), topic=(.+)><>OneMinuteRate'
+    name: kafka_server_brokertopicmetrics_$1
+    labels:
+      topic: "$2"
+    type: GAUGE
+
+  # Taille sur disque par topic/partition — le signal le plus direct
+  # d'un topic qui grossit anormalement (rétention mal réglée, boucle
+  # de republication...).
+  - pattern: 'kafka.log<type=Log, name=Size, topic=(.+), partition=(.+)><>Value'
+    name: kafka_log_size_bytes
+    labels:
+      topic: "$1"
+      partition: "$2"
+    type: GAUGE
+
+  # Nombre de partitions gérées par ce broker (nœud unique : doit rester
+  # stable et cohérent avec le nombre de topics créés).
+  - pattern: 'kafka.server<type=ReplicaManager, name=(LeaderCount|PartitionCount)><>Value'
+    name: kafka_server_replicamanager_$1
+    type: GAUGE
+
+  # Nœud unique en KRaft : ce broker doit toujours être son propre
+  # contrôleur (valeur 1). Une bascule à 0 sans intervention voulue
+  # serait anormale.
+  - pattern: 'kafka.controller<type=KafkaController, name=ActiveControllerCount><>Value'
+    name: kafka_controller_activecontrollercount
+    type: GAUGE

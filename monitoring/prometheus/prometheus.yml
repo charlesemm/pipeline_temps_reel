@@ -1,11 +1,17 @@
 # Configuration Prometheus — étape 5 (supervision, public SGD).
 #
-# Ne collecte QUE ce que Flink expose nativement (métriques applicatives :
-# job en cours, débit, mémoire JVM). L'état des connecteurs Debezium et la
-# fraîcheur des KPI sont interrogés directement par Grafana (API REST et
-# SQL), pas via Prometheus — voir docs/decisions.md pour la justification
-# (éviter d'ajouter des exportateurs supplémentaires sur une machine
-# contrainte en RAM).
+# Flink expose ses métriques nativement (job en cours, débit, mémoire JVM).
+# Kafka, depuis l'étape 7, via l'agent JMX embarqué dans son image
+# (kafka/jmx-kafka.yml) — pas un service séparé, un agent dans le même
+# processus JVM, donc sans coût mémoire supplémentaire notable. L'état des
+# connecteurs Debezium et la fraîcheur des KPI restent interrogés
+# directement par Grafana (API REST et SQL), pas via Prometheus — voir
+# docs/decisions.md pour la justification (éviter les exportateurs
+# séparés sur une machine longtemps restée contrainte en RAM).
+#
+# Étape 7 (suite) : disponibilité de Superset, Grafana, Schema Registry et
+# du reverse-proxy — aucun de ces quatre n'était surveillé (constaté le
+# 2026-09-14), via blackbox_exporter (monitoring/blackbox/blackbox.yml).
 
 global:
   scrape_interval: 10s
@@ -19,3 +25,39 @@ scrape_configs:
   - job_name: flink-taskmanager
     static_configs:
       - targets: ["flink-taskmanager:9249"]
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka:7071"]
+
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://superset:8088/health
+          - http://grafana:3000/api/health
+          - http://schema-registry:8081/subjects
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: blackbox-https
+    metrics_path: /probe
+    params:
+      module: [https_2xx_skip_verify]
+    static_configs:
+      - targets:
+          - https://reverse-proxy:3443/api/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

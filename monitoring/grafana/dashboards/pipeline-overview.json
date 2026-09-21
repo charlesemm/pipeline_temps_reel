@@ -217,8 +217,86 @@
     },
     {
       "type": "row",
-      "title": "Historique",
+      "title": "Kafka",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "id": 104,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Débit du broker Kafka",
+      "id": 30,
+      "description": "Agent JMX embarqué dans le broker (port 7071) — pas un service séparé, aucun coût mémoire notable. Ajouté le 2026-09-12.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "kafka_server_brokertopicmetrics_bytesinpersec", "legendFormat": "Entrant", "refId": "A" },
+        { "expr": "kafka_server_brokertopicmetrics_bytesoutpersec", "legendFormat": "Sortant", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    },
+    {
+      "type": "table",
+      "title": "Taille des topics",
+      "id": 31,
+      "description": "Somme des partitions par topic. Un topic qui grossit sans plafond de rétention explicite est un signal à surveiller — voir docs/decisions.md (incident des slots de réplication).",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum by (topic) (kafka_log_size_bytes)", "format": "table", "instant": true, "refId": "A" }
+      ],
+      "transformations": [{ "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "instance": true, "job": true } } }],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [{ "id": "unit", "value": "bytes" }, { "id": "displayName", "value": "taille" }] }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "title": "Bases de données et audit",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
+      "id": 105,
+      "collapsed": false
+    },
+    {
+      "type": "table",
+      "title": "Taille des bases PostgreSQL",
+      "id": 32,
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 29 },
+      "datasource": { "type": "postgres", "uid": "postgres-analytics" },
+      "targets": [
+        { "format": "table", "rawSql": "SELECT 'dprest_analytics' AS base, pg_database_size('dprest_analytics') AS octets", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "overrides": [] }, "overrides": [{ "matcher": { "id": "byName", "options": "octets" }, "properties": [{ "id": "unit", "value": "bytes" }] }] }
+    },
+    {
+      "type": "table",
+      "title": "Connexions actives (base analytique)",
+      "id": 33,
+      "description": "Depuis l'étape 7 : chaque service a son propre compte (dprest, dprest_lecture...) — un compte inattendu ici serait un signal d'alerte.",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 29 },
+      "datasource": { "type": "postgres", "uid": "postgres-analytics" },
+      "targets": [
+        { "format": "table", "rawSql": "SELECT usename AS compte, COUNT(*) AS connexions FROM pg_stat_activity WHERE datname = current_database() GROUP BY usename ORDER BY connexions DESC", "refId": "A" }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Activité Superset (10 dernières actions)",
+      "id": 34,
+      "description": "Journal d'audit natif de Superset, rendu visible ici sans nouvel outil — étape 7 (traçabilité).",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 29 },
+      "datasource": { "type": "postgres", "uid": "superset-db" },
+      "targets": [
+        { "format": "table", "rawSql": "SELECT dttm AS quand, u.username AS utilisateur, l.action FROM logs l LEFT JOIN ab_user u ON u.id = l.user_id ORDER BY dttm DESC LIMIT 10", "refId": "A" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Historique",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
       "id": 102,
       "collapsed": false
     },
@@ -226,7 +304,7 @@
       "type": "timeseries",
       "title": "Débit par opérateur source (événements/s)",
       "id": 20,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "expr": "flink_taskmanager_job_task_operator_numRecordsInPerSecond{job_name=\"kpi_continu\", task_name=~\"Source.*\"}", "legendFormat": "{{task_name}}", "refId": "A" }
@@ -237,13 +315,102 @@
       "type": "timeseries",
       "title": "Mémoire TaskManager dans le temps",
       "id": 21,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "expr": "flink_taskmanager_Status_JVM_Memory_Heap_Used", "legendFormat": "Utilisé", "refId": "A" },
         { "expr": "flink_taskmanager_Status_JVM_Memory_Heap_Max", "legendFormat": "Maximum", "refId": "B" }
       ],
       "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "type": "row",
+      "title": "Disponibilité des services",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 },
+      "id": 106,
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "Superset",
+      "id": 40,
+      "description": "Sonde HTTP via blackbox_exporter sur /health — étape 7 (suite), ajouté le 2026-09-14 : Superset n'avait jusque-là aucune surveillance de disponibilité, seule son activité passée était visible (panneau « Activité Superset »).",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 45 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "probe_success{instance=\"http://superset:8088/health\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "INJOIGNABLE", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": { "textMode": "value", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "stat",
+      "title": "Grafana (auto-surveillance)",
+      "id": 41,
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 45 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "probe_success{instance=\"http://grafana:3000/api/health\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "INJOIGNABLE", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": { "textMode": "value", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "stat",
+      "title": "Schema Registry",
+      "id": 42,
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 45 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "probe_success{instance=\"http://schema-registry:8081/subjects\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "INJOIGNABLE", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": { "textMode": "value", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "stat",
+      "title": "Reverse-proxy (HTTPS)",
+      "id": 43,
+      "description": "Seul point d'accès HTTPS externe pour Grafana et Superset depuis l'étape 7 (ports en clair retirés). Sonde en HTTPS, certificat auto-signé accepté (module https_2xx_skip_verify).",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 45 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "probe_success{instance=\"https://reverse-proxy:3443/api/health\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "INJOIGNABLE", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": { "textMode": "value", "colorMode": "background", "graphMode": "none" }
     }
   ]
 }

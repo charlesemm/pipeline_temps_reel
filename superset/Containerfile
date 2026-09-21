@@ -1,0 +1,10 @@
+# L'image officielle apache/superset ne contient PAS de pilote PostgreSQL
+# par défaut (seul SQLite fonctionne "out of the box") — constaté le
+# 2026-09-11 : superset-init échouait avec "ModuleNotFoundError: No
+# module named 'psycopg2'", sur la connexion à sa PROPRE base de
+# métadonnées (superset-db), avant même d'atteindre la base analytique.
+FROM docker.io/apache/superset:4.1.1
+
+USER root
+RUN pip install --no-cache-dir psycopg2-binary==2.9.9
+USER superset

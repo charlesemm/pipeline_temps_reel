@@ -5,6 +5,14 @@
 # docs/decisions.md) : trop d'alertes tue l'alerte, surtout pour une
 # démonstration en soutenance.
 #
+# Étape 7 (suite) : 4 alertes ajoutées le 2026-09-14, sur constat que
+# Superset, Grafana lui-même, Schema Registry et le reverse-proxy
+# n'avaient aucune surveillance — seul un utilisateur qui tombe sur une
+# page en erreur l'aurait remarqué. Basées sur blackbox_exporter
+# (monitoring/blackbox/blackbox.yml), pas sur un parsing par service :
+# Superset ne répond pas en JSON sur /health (texte brut "OK"), et le
+# reverse-proxy est en HTTPS avec certificat auto-signé.
+#
 # Chaque règle interroge directement la source la plus fiable pour le
 # signal concerné (Prometheus pour Flink, l'API REST de Kafka Connect
 # via Infinity pour Debezium, SQL direct pour la fraîcheur) plutôt que
@@ -214,4 +222,112 @@ groups:
               expression: A
               conditions:
                 - evaluator: { type: gt, params: [2000] }
+              refId: C
+
+      - uid: alerte-superset-injoignable
+        title: "Superset injoignable"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: warning }
+        annotations:
+          summary: "Superset ne répond plus sur /health."
+          description: "Public DPREST : les dashboards deviennent inaccessibles sans que personne ne soit prévenu côté SGD. Vérifier le conteneur superset (podman logs pipeline_temps_reel-superset-1)."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: probe_success{instance="http://superset:8088/health"}
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C
+
+      - uid: alerte-grafana-injoignable
+        title: "Grafana injoignable"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: warning }
+        annotations:
+          summary: "Grafana ne répond plus sur /api/health."
+          description: "Auto-surveillance : si cette alerte ne se déclenche jamais alors que Grafana est réellement en panne, c'est attendu — Grafana ne peut pas s'auto-alerter une fois tombé. À croiser avec le healthcheck du conteneur (podman ps)."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: probe_success{instance="http://grafana:3000/api/health"}
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C
+
+      - uid: alerte-schema-registry-injoignable
+        title: "Schema Registry injoignable"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: critical }
+        annotations:
+          summary: "Schema Registry ne répond plus sur /subjects."
+          description: "Le connecteur Debezium Avro et tout consommateur Avro en dépendent pour valider les schémas — une panne silencieuse ici bloque la capture sans que l'état RUNNING du connecteur JSON ne le révèle."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: probe_success{instance="http://schema-registry:8081/subjects"}
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C
+
+      - uid: alerte-reverse-proxy-injoignable
+        title: "Reverse-proxy (HTTPS) injoignable"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: critical }
+        annotations:
+          summary: "Le reverse-proxy ne répond plus en HTTPS."
+          description: "Seul point d'accès HTTPS pour Grafana et Superset depuis l'extérieur du réseau Podman (ports 3000/8088 non publiés depuis l'étape 7) — sa panne rend les deux outils inaccessibles même s'ils tournent normalement en interne."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: probe_success{instance="https://reverse-proxy:3443/api/health"}
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
               refId: C

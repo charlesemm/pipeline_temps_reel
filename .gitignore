@@ -25,4 +25,16 @@ __pycache__/
 Thumbs.db
 NUL
 
-docs/
+# Secrets pour Kafka Connect (étape 7) — voir connectors/secrets/README.md
+connectors/secrets/
+
+# Identifiants des comptes nominatifs (SGD / DPREST) — ne jamais versionner
+secrets/
+
+# Certificat auto-signé (étape 7) — régénérable, voir reverse-proxy/README.md
+reverse-proxy/certs/
+# Sauvegardes chiffrees de postgres-analytics (etape 7b)
+backups/
+
+# Archives d audit (etape 7c) : noms d utilisateurs et requetes
+audit/

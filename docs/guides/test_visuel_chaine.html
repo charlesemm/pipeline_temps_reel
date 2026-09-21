@@ -1,0 +1,767 @@
+<!doctype html>
+<title>Suivre la chaîne</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #f3f6f5;
+    --surface: #ffffff;
+    --surface-2: #eef3f1;
+    --ink: #142523;
+    --ink-soft: #4c625d;
+    --line: #d7dfdc;
+    --line-strong: #b9c6c1;
+    --accent: #0f7a72;
+    --accent-ink: #ffffff;
+    --accent-soft: #d9efec;
+    --accent-soft-line: #b7ddd6;
+    --ok: #237a4e;
+    --ok-soft: #e1f3e8;
+    --warn: #a56a10;
+    --warn-soft: #fbedd4;
+    --critical: #b8442c;
+    --critical-soft: #fbe5df;
+    --shadow: 0 1px 2px rgba(20, 37, 35, 0.06), 0 8px 24px -12px rgba(20, 37, 35, 0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1917;
+      --surface: #142523;
+      --surface-2: #182e2b;
+      --ink: #e9f2f0;
+      --ink-soft: #a9beb9;
+      --line: #24403c;
+      --line-strong: #325650;
+      --accent: #3cc4b7;
+      --accent-ink: #06201c;
+      --accent-soft: #163531;
+      --accent-soft-line: #2b544d;
+      --ok: #5bd394;
+      --ok-soft: #123023;
+      --warn: #e3ab4f;
+      --warn-soft: #332508;
+      --critical: #e8846c;
+      --critical-soft: #3a1a13;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0e1917;
+    --surface: #142523;
+    --surface-2: #182e2b;
+    --ink: #e9f2f0;
+    --ink-soft: #a9beb9;
+    --line: #24403c;
+    --line-strong: #325650;
+    --accent: #3cc4b7;
+    --accent-ink: #06201c;
+    --accent-soft: #163531;
+    --accent-soft-line: #2b544d;
+    --ok: #5bd394;
+    --ok-soft: #123023;
+    --warn: #e3ab4f;
+    --warn-soft: #332508;
+    --critical: #e8846c;
+    --critical-soft: #3a1a13;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    padding-inline: 20px;
+    padding-block: 0 64px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .mono {
+    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  a { color: var(--accent); }
+
+  h1, h2, h3 { text-wrap: balance; }
+
+  /* ── Bandeau supérieur ─────────────────────────────────────── */
+  header.top {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--bg);
+    padding-block: 18px 14px;
+    border-bottom: 1px solid var(--line);
+    margin-inline: -20px;
+    padding-inline: 20px;
+  }
+
+  .top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 16px;
+    flex-wrap: wrap;
+    max-width: 760px;
+    margin-inline: auto;
+  }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    margin: 4px 0 0;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  .progress-pill {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.82rem;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+    padding: 6px 14px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .progress-pill strong { color: var(--ink); }
+
+  .ip-bar {
+    max-width: 760px;
+    margin: 14px auto 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    box-shadow: var(--shadow);
+  }
+  .ip-bar label {
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    white-space: nowrap;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  .ip-bar input {
+    flex: 1;
+    min-width: 0;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.92rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    padding: 6px 9px;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  .ip-bar input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .ip-bar .hint { font-size: 0.74rem; color: var(--ink-soft); white-space: nowrap; }
+
+  /* ── Corps ─────────────────────────────────────────────────── */
+  main { max-width: 760px; margin: 0 auto; }
+
+  .intro {
+    padding-block: 22px 8px;
+    color: var(--ink-soft);
+    font-size: 0.98rem;
+    line-height: 1.6;
+  }
+  .intro strong { color: var(--ink); }
+
+  /* ── Chaîne (spine) ────────────────────────────────────────── */
+  .chain {
+    position: relative;
+    padding-left: 34px;
+    margin-top: 18px;
+  }
+  .chain::before {
+    content: "";
+    position: absolute;
+    left: 13px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    background: linear-gradient(var(--accent-soft-line), var(--line));
+  }
+
+  .stage {
+    position: relative;
+    margin-bottom: 20px;
+  }
+
+  .stage-dot {
+    position: absolute;
+    left: -34px;
+    top: 22px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--accent);
+    transition: background 0.15s, color 0.15s;
+  }
+  .stage.done .stage-dot {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 18px 20px 20px;
+    transition: border-color 0.15s;
+  }
+  .stage.done .card { border-color: var(--accent-soft-line); }
+
+  .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .stage-label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 3px;
+  }
+  .stage h3 {
+    margin: 0;
+    font-size: 1.14rem;
+    font-weight: 700;
+  }
+
+  .stage-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.84rem;
+    font-weight: 500;
+    color: var(--accent);
+    text-decoration: none;
+    border: 1px solid var(--accent-soft-line);
+    background: var(--accent-soft);
+    border-radius: 7px;
+    padding: 6px 11px;
+    white-space: nowrap;
+  }
+  .stage-link:hover { border-color: var(--accent); }
+  .stage-link svg { width: 12px; height: 12px; flex: none; }
+
+  .step-block { margin-top: 12px; }
+  .step-block p { margin: 0 0 6px; line-height: 1.55; font-size: 0.95rem; }
+  .step-label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .do .step-label { color: var(--ink-soft); }
+  .see .step-label { color: var(--accent); }
+
+  .see {
+    margin-top: 10px;
+    background: var(--surface-2);
+    border-radius: 9px;
+    padding: 10px 13px;
+  }
+  .see p { margin: 4px 0 0; }
+  .see .value {
+    font-family: "IBM Plex Mono", monospace;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 0.88em;
+  }
+
+  .note {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: var(--warn);
+    background: var(--warn-soft);
+    border-radius: 8px;
+    padding: 8px 12px;
+    line-height: 1.5;
+  }
+
+  .check-row {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .check-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    flex: none;
+  }
+  .check-row label {
+    font-size: 0.88rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+  }
+  .stage.done .check-row label { color: var(--ok); font-weight: 500; }
+
+  /* ── Connecteur entre étapes (flux de données) ────────────── */
+  .flow-tag {
+    margin-left: 34px;
+    margin-top: -8px;
+    margin-bottom: 10px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .flow-tag svg { width: 12px; height: 12px; color: var(--line-strong); }
+
+  /* ── Section bonus (résilience) ────────────────────────────── */
+  .section-title {
+    margin: 40px 0 4px;
+    font-size: 1.02rem;
+    font-weight: 700;
+  }
+  .section-sub {
+    margin: 0 0 16px;
+    color: var(--ink-soft);
+    font-size: 0.92rem;
+    line-height: 1.55;
+  }
+
+  .resilience {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 18px 20px;
+  }
+  .resilience ol { margin: 10px 0 0; padding-left: 20px; }
+  .resilience li { margin-bottom: 8px; line-height: 1.55; font-size: 0.94rem; }
+  .resilience .value {
+    font-family: "IBM Plex Mono", monospace;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 0.9em;
+  }
+
+  /* ── Pied ──────────────────────────────────────────────────── */
+  footer {
+    max-width: 760px;
+    margin: 40px auto 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  button.reset {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.78rem;
+    background: none;
+    border: 1px solid var(--line-strong);
+    color: var(--ink-soft);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  button.reset:hover { border-color: var(--critical); color: var(--critical); }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 1.28rem; }
+    .card { padding: 15px 15px 17px; }
+    .chain { padding-left: 28px; }
+    .stage-dot { left: -28px; width: 24px; height: 24px; font-size: 0.74rem; }
+  }
+</style>
+
+<header class="top">
+  <div class="top-row">
+    <div>
+      <p class="eyebrow">Pipeline temps réel · CNAM-CI / DPREST</p>
+      <h1>Suivre la chaîne, étape par étape</h1>
+    </div>
+    <div class="progress-pill"><strong id="progress-n">0</strong>/7 étapes vues</div>
+  </div>
+  <div class="ip-bar">
+    <label for="ip">IP de la VM</label>
+    <input id="ip" class="mono" type="text" placeholder="ex. 172.31.104.114" autocomplete="off" spellcheck="false">
+    <span class="hint">— affichée par <code class="mono">start-stack.ps1</code></span>
+  </div>
+</header>
+
+<main>
+  <p class="intro">
+    Une seule prestation, suivie <strong>en direct</strong> à travers les 6 interfaces du pipeline —
+    de sa création dans le simulateur à son affichage dans les tableaux de bord DPREST. Ouvre chaque
+    lien dans un nouvel onglet, garde cette page à côté. Coche au fur et à mesure.
+  </p>
+
+  <div class="chain" id="chain">
+
+    <!-- 1 -->
+    <div class="stage" data-stage="1">
+      <div class="stage-dot">1</div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="stage-label">Génération — simulateur_V5</p>
+            <h3>Lancer une prestation</h3>
+          </div>
+          <a class="stage-link" data-port="8000" data-path="" href="#" target="_blank" rel="noopener">
+            :8000
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M9 7h8v8"/></svg>
+          </a>
+        </div>
+        <div class="step-block do">
+          <p class="step-label">À faire</p>
+          <p>Sur le tableau de bord du simulateur, lance une simulation (une vingtaine de passages suffit).</p>
+        </div>
+        <div class="see">
+          <p class="step-label">À observer</p>
+          <p>Le compteur de passages du simulateur augmente en direct — c'est le tout début de la chaîne, avant même Kafka.</p>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="c1"><label for="c1">Simulation lancée, compteur en mouvement</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-tag">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+      capturé par Debezium (CDC) sur le journal de transactions PostgreSQL
+    </div>
+
+    <!-- 2 -->
+    <div class="stage" data-stage="2">
+      <div class="stage-dot">2</div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="stage-label">Capture — Debezium / Kafka</p>
+            <h3>Voir l'événement arriver dans Kafka</h3>
+          </div>
+          <a class="stage-link" data-port="8085" data-path="" href="#" target="_blank" rel="noopener">
+            AKHQ :8085
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M9 7h8v8"/></svg>
+          </a>
+        </div>
+        <div class="step-block do">
+          <p class="step-label">À faire</p>
+          <p>Menu <em>Topics</em> → <span class="value mono">dprest-json.public.TB_FACTURES_PRESTATIONS</span>. Regarde le nombre de messages, onglet <em>Data</em> pour voir les derniers événements.</p>
+        </div>
+        <div class="see">
+          <p class="step-label">À observer</p>
+          <p>Le nombre de messages augmente de quelques unités. Dans <em>Connects</em>, le connecteur <span class="value mono">dprest-postgres-source-json</span> doit afficher <span class="value mono">RUNNING</span> pour le connecteur <strong>et</strong> pour sa tâche.</p>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="c2"><label for="c2">Nouveaux messages visibles, connecteur RUNNING</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-tag">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+      lu, joint et agrégé par le job Flink <span class="mono">kpi_continu</span>
+    </div>
+
+    <!-- 3 -->
+    <div class="stage" data-stage="3">
+      <div class="stage-dot">3</div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="stage-label">Traitement — Flink</p>
+            <h3>Voir le job absorber le flux</h3>
+          </div>
+          <a class="stage-link" data-port="8082" data-path="" href="#" target="_blank" rel="noopener">
+            :8082
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M9 7h8v8"/></svg>
+          </a>
+        </div>
+        <div class="step-block do">
+          <p class="step-label">À faire</p>
+          <p>Onglet <em>Running Jobs</em> → ouvre <span class="value mono">kpi_continu</span>. Regarde le graphe des opérateurs.</p>
+        </div>
+        <div class="see">
+          <p class="step-label">À observer</p>
+          <p>Statut <span class="value mono">RUNNING</span>. Sur les cases <em>Source</em>, les compteurs <strong>Records Sent</strong> augmentent pendant quelques secondes après la simulation. L'onglet <em>Backpressure</em> doit rester à <span class="value mono">OK</span>.</p>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="c3"><label for="c3">Job RUNNING, compteurs en mouvement</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-tag">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+      écrit en UPSERT dans la base analytique
+    </div>
+
+    <!-- 4 -->
+    <div class="stage" data-stage="4">
+      <div class="stage-dot">4</div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="stage-label">Stockage — PostgreSQL analytique</p>
+            <h3>Voir le KPI mis à jour</h3>
+          </div>
+          <span class="stage-link mono" style="cursor:default;">pgAdmin</span>
+        </div>
+        <div class="step-block do">
+          <p class="step-label">À faire</p>
+          <p>Dans pgAdmin (serveur <em>DPREST analytique</em>), Query Tool sur <span class="value mono">dprest_analytics</span> :</p>
+          <p class="mono" style="background:var(--surface-2);border-radius:6px;padding:8px 10px;font-size:0.86rem;">SELECT SUM(nombre_prestations) FROM kpi_prestations_jour;</p>
+        </div>
+        <div class="see">
+          <p class="step-label">À observer</p>
+          <p>Relance la requête (F5) : le total a augmenté du nombre de prestations simulées à l'étape 1 — <strong>sans avoir rien recalculé toi-même</strong>.</p>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="c4"><label for="c4">Total en base cohérent avec la simulation</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-tag">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+      lu en direct par les deux tableaux de bord
+    </div>
+
+    <!-- 5 -->
+    <div class="stage" data-stage="5">
+      <div class="stage-dot">5</div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="stage-label">Supervision — Grafana (public SGD)</p>
+            <h3>Voir le pipeline se porter bien</h3>
+          </div>
+          <a class="stage-link" data-port="3443" data-scheme="https" data-path="" href="#" target="_blank" rel="noopener">
+            :3443
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M9 7h8v8"/></svg>
+          </a>
+        </div>
+        <div class="step-block do">
+          <p class="step-label">À faire</p>
+          <p>Dashboard <em>Pipeline DPREST — Supervision</em>. Certificat auto-signé : accepte l'avertissement du navigateur (normal, voir étape 7).</p>
+        </div>
+        <div class="see">
+          <p class="step-label">À observer</p>
+          <p>Pavé <strong>Job Flink</strong> vert (RUNNING). Pavé <strong>Fraîcheur des KPI</strong> bas (quelques secondes). Le graphique <strong>Débit par opérateur source</strong> montre le pic de la simulation qu'on vient de lancer.</p>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="c5"><label for="c5">Pipeline vert, fraîcheur basse, pic visible</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-tag">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+      même donnée, lue côté métier
+    </div>
+
+    <!-- 6 -->
+    <div class="stage" data-stage="6">
+      <div class="stage-dot">6</div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="stage-label">Restitution — Superset (public DPREST)</p>
+            <h3>Voir le KPI côté métier</h3>
+          </div>
+          <a class="stage-link" data-port="8443" data-scheme="https" data-path="" href="#" target="_blank" rel="noopener">
+            :8443
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7M9 7h8v8"/></svg>
+          </a>
+        </div>
+        <div class="step-block do">
+          <p class="step-label">À faire</p>
+          <p>Connecte-toi avec le compte <span class="value mono">dprest</span> (lecture seule). Ouvre <em>DPREST - Prestations et facturation</em>.</p>
+        </div>
+        <div class="see">
+          <p class="step-label">À observer</p>
+          <p>La vignette <strong>Prestations totales</strong> affiche le même total que pgAdmin à l'étape 4. Essaie de modifier un graphique : refusé — ce compte est en lecture seule.</p>
+        </div>
+        <div class="note">Astuce démo : ouvre ce dashboard <em>avant</em> de lancer la simulation à l'étape 1, rafraîchis (F5) une fois arrivé ici — l'écart avant/après est la preuve la plus parlante face à un jury.</div>
+        <div class="check-row">
+          <input type="checkbox" id="c6"><label for="c6">Chiffre identique à la base, écriture refusée</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-tag">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+      la boucle est bouclée
+    </div>
+
+    <!-- 7 -->
+    <div class="stage" data-stage="7">
+      <div class="stage-dot">7</div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <p class="stage-label">Bout en bout</p>
+            <h3>Mesurer le temps réel</h3>
+          </div>
+        </div>
+        <div class="step-block do">
+          <p class="step-label">À faire</p>
+          <p>Note l'heure à laquelle tu as lancé la simulation (étape 1) et l'heure à laquelle le chiffre a bougé dans Superset (étape 6).</p>
+        </div>
+        <div class="see">
+          <p class="step-label">À observer</p>
+          <p>L'écart se compte en <strong>secondes</strong>. Face au circuit manuel actuel (e-mail → script → Excel, plusieurs jours), c'est exactement l'argument du chapitre 7 du mémoire.</p>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="c7"><label for="c7">Délai de bout en bout mesuré</label>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="section-title">Test de panne (optionnel)</p>
+  <p class="section-sub">
+    Réutilise le scénario déjà validé à l'étape 5 — utile pour démontrer la reprise après incident
+    (chapitre 7) sans toucher au terminal.
+  </p>
+  <div class="resilience">
+    <ol>
+      <li>Dans AKHQ (<span class="value mono">:8085</span>), section <em>Connects</em> → le connecteur <span class="value mono">dprest-postgres-source-json</span> → bouton <strong>Pause</strong>.</li>
+      <li>Ouvre Grafana → dashboard de supervision. Attends une minute : le pavé <strong>État du connecteur Debezium</strong> passe en alerte, une notification apparaît dans le bandeau d'alertes.</li>
+      <li>Relance le connecteur (<strong>Resume</strong> dans AKHQ) : l'alerte se résout d'elle-même, sans autre intervention.</li>
+    </ol>
+  </div>
+
+  <footer>
+    <span>Étapes 0 à 7 du pipeline — voir <code class="mono">docs/PLAN.md</code> pour le détail de chacune.</span>
+    <button class="reset" id="reset-btn" type="button">Réinitialiser les cases</button>
+  </footer>
+</main>
+
+<script>
+(function () {
+  var STORAGE_IP = "pipeline_test_ip";
+  var STORAGE_CHECKS = "pipeline_test_checks";
+
+  var ipInput = document.getElementById("ip");
+  var links = Array.prototype.slice.call(document.querySelectorAll(".stage-link[data-port]"));
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('.check-row input[type="checkbox"]'));
+  var progressN = document.getElementById("progress-n");
+
+  function safeGet(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+  function safeSet(key, val) {
+    try { localStorage.setItem(key, val); } catch (e) {}
+  }
+
+  function updateLinks() {
+    var ip = (ipInput.value || "").trim();
+    links.forEach(function (a) {
+      var scheme = a.getAttribute("data-scheme") || "http";
+      var port = a.getAttribute("data-port");
+      if (ip) {
+        a.href = scheme + "://" + ip + ":" + port + "/";
+        a.style.opacity = "1";
+        a.style.pointerEvents = "auto";
+      } else {
+        a.href = "#";
+        a.style.opacity = "0.5";
+        a.style.pointerEvents = "none";
+      }
+    });
+  }
+
+  ipInput.addEventListener("input", function () {
+    safeSet(STORAGE_IP, ipInput.value);
+    updateLinks();
+  });
+
+  var savedIp = safeGet(STORAGE_IP);
+  if (savedIp) ipInput.value = savedIp;
+  updateLinks();
+
+  function loadChecks() {
+    var raw = safeGet(STORAGE_CHECKS);
+    var state = {};
+    if (raw) { try { state = JSON.parse(raw); } catch (e) {} }
+    boxes.forEach(function (b) {
+      if (state[b.id]) { b.checked = true; }
+      reflectStage(b);
+    });
+    updateProgress();
+  }
+
+  function reflectStage(box) {
+    var stage = box.closest(".stage");
+    if (stage) stage.classList.toggle("done", box.checked);
+  }
+
+  function saveChecks() {
+    var state = {};
+    boxes.forEach(function (b) { state[b.id] = b.checked; });
+    safeSet(STORAGE_CHECKS, JSON.stringify(state));
+  }
+
+  function updateProgress() {
+    var n = boxes.filter(function (b) { return b.checked; }).length;
+    progressN.textContent = n;
+  }
+
+  boxes.forEach(function (b) {
+    b.addEventListener("change", function () {
+      reflectStage(b);
+      saveChecks();
+      updateProgress();
+    });
+  });
+
+  document.getElementById("reset-btn").addEventListener("click", function () {
+    boxes.forEach(function (b) { b.checked = false; reflectStage(b); });
+    saveChecks();
+    updateProgress();
+  });
+
+  loadChecks();
+})();
+</script>

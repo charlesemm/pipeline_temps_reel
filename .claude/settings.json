@@ -6,5 +6,8 @@
       "Bash(podman machine *)",
       "Bash(podman ps *)"
     ]
+  },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   }
 }

@@ -6,6 +6,10 @@ akhq:
     pipeline-cluster:
       properties:
         bootstrap.servers: "kafka:9092"
+        security.protocol: "SASL_PLAINTEXT"
+        sasl.mechanism: "SCRAM-SHA-512"
+        # Mot de passe injecté depuis .env via la variable AKHQ_KAFKA_PASSWORD.
+        sasl.jaas.config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="akhq" password="${AKHQ_KAFKA_PASSWORD}";'
       schema-registry:
         url: "http://schema-registry:8081"
       connect:

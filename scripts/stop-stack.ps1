@@ -12,7 +12,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$PipelineDir  = "C:\Users\charles.nguessan\Documents\pipeline_temps_reel"
+$PipelineDir  = "C:\Users\charles.nguessan\OneDrive - IPSCNAM\Documents\pipeline_temps_reel"
 $SimulatorDir = "C:\Users\charles.nguessan\OneDrive - IPSCNAM\Documents\simulateur_V5"
 
 Write-Host ""

@@ -1,0 +1,15 @@
+# Image Kafka avec l'agent JMX Prometheus embarqué (étape 7 — ajout de
+# la supervision Kafka) et un stockage persistant correctement déclaré.
+#
+# Coordonnées vérifiées sur GitHub avant écriture (voir docs/decisions.md) :
+# la version "1.0.1" initialement visée n'existe pas (404) — 1.6.0 est la
+# dernière version publiée au moment de l'écriture.
+FROM docker.io/apache/kafka:3.7.0
+
+USER root
+# Base Alpine : pas de curl, wget est déjà présent (vérifié dans le
+# conteneur en service avant d'écrire ce Containerfile).
+RUN wget -q -O /opt/kafka/jmx_prometheus_javaagent.jar \
+      https://github.com/prometheus/jmx_exporter/releases/download/1.6.0/jmx_prometheus_javaagent-1.6.0.jar
+COPY jmx-kafka.yml /opt/kafka/jmx-kafka.yml
+USER appuser

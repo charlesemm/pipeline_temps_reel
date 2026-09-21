@@ -15,17 +15,32 @@
 services:
   # ── Étape 2 : Kafka (KRaft, nœud unique combiné broker+contrôleur) ──
   kafka:
-    image: docker.io/apache/kafka:3.7.0
+    build:
+      context: ./kafka
+      dockerfile: Containerfile
     restart: unless-stopped
     environment:
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      # Étape 7e — authentification par composant (SASL/SCRAM-SHA-512) et
+      # ACL par topic. SASL sur l'écouteur interne (9092) et sur l'écouteur
+      # hôte (29092). LOCAL (localhost:9094, en clair) n'est joignable que
+      # depuis le conteneur kafka lui-même : il sert à l'administration
+      # (utilisateurs, ACL) et au trafic inter-broker. CONTROLLER reste en
+      # clair (quorum interne, non publié). Le principal sans authentification
+      # (ANONYMOUS) n'existe donc que sur ces deux écouteurs internes.
+      # Sans TLS, SCRAM protège les mots de passe (échange par défi) mais pas
+      # le contenu des messages : écart assumé, voir docs/guides/etape7e_kafka_securise.md.
+      KAFKA_LISTENERS: SASL://:9092,HOST://:29092,CONTROLLER://:9093,LOCAL://localhost:9094
+      KAFKA_ADVERTISED_LISTENERS: SASL://kafka:9092,HOST://localhost:29092,LOCAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: SASL:SASL_PLAINTEXT,HOST:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT,LOCAL:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: LOCAL
+      KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-512
+      KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
+      KAFKA_SUPER_USERS: User:ANONYMOUS;User:admin
       # Nœud unique : pas de sens à répliquer sur soi-même, et ça évite
       # des erreurs de démarrage (facteur de réplication > nombre de brokers).
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
@@ -35,13 +50,31 @@ services:
       # Tas JVM réduit : on est sur une machine à 6 Go RAM au total pour
       # toute la stack (voir docs/decisions.md, étape 0).
       KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+      # Étape 7 : stockage persistant — jusque-là /tmp/kraft-combined-logs
+      # par défaut (éphémère, effacé à chaque recréation du conteneur),
+      # découvert en préparant l'ajout de l'agent JMX ci-dessous. Voir
+      # le volume "kafka_data" en bas de ce fichier.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    # Agent JMX -> Prometheus (port 7071), lu par monitoring/prometheus/
+    # prometheus.yml (kafka/jmx-kafka.yml). Injecté ici, sur la commande
+    # de démarrage, PAS via `environment: KAFKA_OPTS` — cette variable
+    # s'appliquerait alors à CHAQUE script kafka-*.sh (y compris le
+    # healthcheck ci-dessous et nos propres `podman exec`), qui
+    # tenteraient tous de relier le port 7071 déjà pris par le broker.
+    # Constaté le 2026-09-12 : conteneur bloqué en "starting" indéfiniment
+    # (le healthcheck lui-même échouait pour cette raison).
+    command: >
+      sh -c "KAFKA_OPTS='-javaagent:/opt/kafka/jmx_prometheus_javaagent.jar=7071:/opt/kafka/jmx-kafka.yml -Djava.security.auth.login.config=/opt/kafka/config/kafka_server_jaas.conf' exec /etc/kafka/docker/run"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+      - ./kafka/kafka_server_jaas.conf:/opt/kafka/config/kafka_server_jaas.conf:ro
     ports:
       # Port hôte pour inspecter Kafka depuis Windows (kcat, etc.) sans
-      # entrer dans le réseau Podman. PLAINTEXT (interne, kafka:9092)
-      # reste le seul écouteur utilisé par les autres conteneurs.
+      # entrer dans le réseau Podman. Authentification SASL/SCRAM requise
+      # (utilisateur admin) ; les conteneurs utilisent kafka:9092.
       - "29092:29092"
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9094 >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -56,7 +89,10 @@ services:
         condition: service_healthy
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: SASL_PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM: SCRAM-SHA-512
+      SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="schema-registry" password="${KAFKA_SCHEMA_REGISTRY_PASSWORD:?KAFKA_SCHEMA_REGISTRY_PASSWORD manquant dans .env}";'
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
       SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx256m -Xms256m"
     ports:
@@ -81,6 +117,18 @@ services:
         condition: service_healthy
     environment:
       CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_SASL_MECHANISM: SCRAM-SHA-512
+      CONNECT_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="connect" password="${KAFKA_CONNECT_PASSWORD:?KAFKA_CONNECT_PASSWORD manquant dans .env}";'
+      CONNECT_PRODUCER_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_PRODUCER_SASL_MECHANISM: SCRAM-SHA-512
+      CONNECT_PRODUCER_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="connect" password="${KAFKA_CONNECT_PASSWORD:?KAFKA_CONNECT_PASSWORD manquant dans .env}";'
+      CONNECT_CONSUMER_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_CONSUMER_SASL_MECHANISM: SCRAM-SHA-512
+      CONNECT_CONSUMER_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="connect" password="${KAFKA_CONNECT_PASSWORD:?KAFKA_CONNECT_PASSWORD manquant dans .env}";'
+      CONNECT_ADMIN_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONNECT_ADMIN_SASL_MECHANISM: SCRAM-SHA-512
+      CONNECT_ADMIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="connect" password="${KAFKA_CONNECT_PASSWORD:?KAFKA_CONNECT_PASSWORD manquant dans .env}";'
       CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
       CONNECT_GROUP_ID: pipeline-connect
       CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
@@ -95,8 +143,16 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
       CONNECT_HEAP_OPTS: "-Xmx512m -Xms512m"
+      # Étape 7 : permet à connectors/*.json de référencer un mot de
+      # passe via ${file:/run/secrets/db.properties:cle} plutôt que de
+      # l'écrire en clair — mécanisme natif de Kafka Connect, pas un
+      # outil ajouté. Voir connectors/secrets/README.md.
+      CONNECT_CONFIG_PROVIDERS: file
+      CONNECT_CONFIG_PROVIDERS_FILE_CLASS: org.apache.kafka.common.config.provider.FileConfigProvider
     ports:
       - "8083:8083"
+    volumes:
+      - ./connectors/secrets/db.properties:/run/secrets/db.properties:ro
     networks:
       # Réseau du projet + réseau partagé avec simulateur_V5 : c'est le
       # seul service qui a besoin d'atteindre son PostgreSQL directement.
@@ -119,6 +175,7 @@ services:
         condition: service_healthy
     environment:
       JAVA_OPTS: "-Xmx256m -Xms256m"
+      AKHQ_KAFKA_PASSWORD: ${KAFKA_AKHQ_PASSWORD:?KAFKA_AKHQ_PASSWORD manquant dans .env}
     volumes:
       - ./akhq/application.yml:/app/application.yml:ro
     ports:
@@ -135,7 +192,28 @@ services:
     environment:
       POSTGRES_DB: dprest_analytics
       POSTGRES_USER: dprest
-      POSTGRES_PASSWORD: ${ANALYTICS_PASSWORD:-dprest_dev_2026}
+      # Étape 7 : plus de valeur par défaut en clair — la variable doit
+      # venir de .env (non versionné), sinon le service refuse de
+      # démarrer (mieux vaut un échec explicite qu'un mot de passe
+      # public par accident).
+      POSTGRES_PASSWORD: ${ANALYTICS_PASSWORD:?ANALYTICS_PASSWORD manquant dans .env}
+    # Étape 7c (traçabilité) : journal d'audit des accès. Chaque connexion,
+    # déconnexion et instruction DDL est tracée avec l'identité de
+    # l'utilisateur ; les instructions refusées (permission denied) sont
+    # déjà journalisées par défaut (log_min_error_statement = error).
+    # pgaudit n'existe pas dans l'image alpine : les SELECT réussis ne sont
+    # pas tracés (limite documentée, voir docs/guides/etape7c_audit.md).
+    # Archivage quotidien signé : scripts/audit-archive.ps1.
+    command:
+      - postgres
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+      - -c
+      - log_statement=ddl
+      - -c
+      - "log_line_prefix=%m [%p] user=%u db=%d app=%a client=%h : "
     volumes:
       - analytics_data:/var/lib/postgresql/data
       - ./sql/analytics:/docker-entrypoint-initdb.d:ro
@@ -196,7 +274,13 @@ services:
         # metaspace, overhead JVM et mémoire managée) : insuffisant pour la
         # jointure de l'étape 4, qui garde les deux flux en état
         # -> OutOfMemoryError. Voir docs/decisions.md.
-        taskmanager.memory.process.size: 1536m
+        # Repassé de 1536m à 2304m le 2026-09-17 : les ajouts du jour
+        # (dim_agents, qualite_anomalies, et surtout deux jointures qui
+        # dupliquent l'état déjà gardé par prestations_enrichies/
+        # ep_enrichies — voir flink/sql/kpi_prestations.sql) ont refait
+        # dépasser le tas disponible -> nouvel OutOfMemoryError. Voir
+        # docs/decisions.md, entrée du 2026-09-17.
+        taskmanager.memory.process.size: 2304m
         # La mémoire « managée » sert surtout à RocksDB, non utilisé ici
         # (état en mémoire). La réduire de 40 % à 10 % rend ~230 Mo au
         # traitement sans consommer un octet de plus sur la machine.
@@ -228,6 +312,21 @@ services:
       retries: 10
       start_period: 15s
 
+  # ── Étape 7 (suite) : disponibilité de Superset, Grafana, Schema
+  # Registry et reverse-proxy — aucun des quatre n'était surveillé
+  # (constaté le 2026-09-14). Config : monitoring/blackbox/blackbox.yml.
+  blackbox-exporter:
+    image: docker.io/prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9115/-/healthy >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   # ── Étape 5 : Grafana (tableaux de bord + alertes, public SGD) ────
   grafana:
     image: docker.io/grafana/grafana-oss:11.1.4
@@ -236,6 +335,8 @@ services:
       prometheus:
         condition: service_healthy
       postgres-analytics:
+        condition: service_healthy
+      superset-db:
         condition: service_healthy
     environment:
       # Datasource « JSON API » : seul moyen simple d'afficher l'état des
@@ -255,11 +356,18 @@ services:
       # "<url>;<dossier_installation>" — voir /run.sh dans l'image.
       GF_INSTALL_PLUGINS: "https://grafana.com/api/plugins/yesoreyeram-infinity-datasource/versions/3.7.1/download;yesoreyeram-infinity-datasource"
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dprest_dev_2026}
-      # Dev/démo uniquement : pas d'inscription libre, mot de passe par
-      # défaut à changer avant toute exposition hors de cette machine
-      # (durci à l'étape 7).
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD manquant dans .env}
+      # Étape 7 (suite) : e-mail du compte admin, appliqué seulement à la
+      # création du conteneur (pas de volume persistant pour Grafana ici,
+      # cf. commentaire plus bas sur le reset automatique du mot de passe).
+      GF_SECURITY_ADMIN_EMAIL: ${GRAFANA_ADMIN_EMAIL:?GRAFANA_ADMIN_EMAIL manquant dans .env}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # Étape 7 : transmis aux fichiers de provisioning (datasources.yml)
+      # via la syntaxe Grafana $__env{...} — remplace le mot de passe en
+      # clair qui y était écrit jusque-là.
+      ANALYTICS_RO_PASSWORD: ${ANALYTICS_RO_PASSWORD:?ANALYTICS_RO_PASSWORD manquant dans .env}
+      SOURCE_RO_PASSWORD: ${SOURCE_RO_PASSWORD:?SOURCE_RO_PASSWORD manquant dans .env}
+      SUPERSET_RO_PASSWORD: ${SUPERSET_RO_PASSWORD:?SUPERSET_RO_PASSWORD manquant dans .env}
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -271,8 +379,9 @@ services:
       # disque sur la VM).
       default: {}
       simulateur_v5_net: {}
-    ports:
-      - "3000:3000"
+    # Étape 7 : plus de port publié en clair — seul `reverse-proxy`
+    # expose Grafana, en HTTPS (3443). Le port 3000 reste joignable en
+    # interne (healthcheck, reverse-proxy) mais plus depuis Windows.
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null"]
       interval: 10s
@@ -280,8 +389,145 @@ services:
       retries: 15
       start_period: 30s
 
+  # ── Étape 6 : Superset (dashboards KPI, public DPREST) ────────────
+  # Base de métadonnées dédiée (dashboards, utilisateurs, connexions) —
+  # distincte de postgres-analytics, qui ne contient que les données KPI.
+  superset-db:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: ${SUPERSET_DB_PASSWORD}
+    volumes:
+      - superset_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Cache des résultats de requêtes et de l'état des filtres — pas de
+  # worker Celery asynchrone (économie de RAM, volumétrie faible du
+  # simulateur ne justifie pas d'exports planifiés en tâche de fond).
+  superset-redis:
+    image: docker.io/library/redis:7.4-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Initialisation : migrations de la base de métadonnées + création du
+  # compte admin. Tourne une fois puis s'arrête — `superset` (ci-dessous)
+  # attend sa réussite avant de démarrer le serveur web.
+  superset-init:
+    build:
+      context: ./superset
+      dockerfile: Containerfile
+    restart: "no"
+    depends_on:
+      superset-db:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+    environment:
+      SUPERSET_DB_HOST: superset-db
+      SUPERSET_DB_NAME: superset
+      SUPERSET_DB_USER: superset
+      SUPERSET_DB_PASSWORD: ${SUPERSET_DB_PASSWORD}
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_REDIS_HOST: superset-redis
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+    command: >
+      bash -c "
+        superset db upgrade &&
+        superset fab create-admin --username ${SUPERSET_ADMIN_USER} --password ${SUPERSET_ADMIN_PASSWORD} --firstname DPREST --lastname Admin --email ${SUPERSET_ADMIN_EMAIL:?SUPERSET_ADMIN_EMAIL manquant dans .env} || true &&
+        superset init
+      "
+
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Containerfile
+    restart: unless-stopped
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+      postgres-analytics:
+        condition: service_healthy
+    environment:
+      SUPERSET_DB_HOST: superset-db
+      SUPERSET_DB_NAME: superset
+      SUPERSET_DB_USER: superset
+      SUPERSET_DB_PASSWORD: ${SUPERSET_DB_PASSWORD}
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_REDIS_HOST: superset-redis
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+    # Étape 7 : plus de port publié en clair — seul `reverse-proxy`
+    # expose Superset, en HTTPS (8443).
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8088/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  # ── Étape 7 : reverse proxy HTTPS (Grafana + Superset) ────────────
+  # Certificat auto-signé, régénérable (reverse-proxy/README.md, non
+  # versionné). Le reste du pipeline reste en clair sur le réseau
+  # interne — décision documentée dans docs/decisions.md.
+  reverse-proxy:
+    # nginx:1.27-alpine visé au départ ; basculé sur ":alpine" (déjà en
+    # cache local) après un pull bloqué côté client Podman/Windows le
+    # 2026-09-12 (réseau instable ce jour-là, sans rapport avec l'image
+    # elle-même — voir docs/decisions.md). À repointer sur une version
+    # figée si l'incident se reproduit ailleurs.
+    image: docker.io/library/nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      grafana:
+        condition: service_healthy
+      superset:
+        condition: service_healthy
+    volumes:
+      # Monté en lecture seule comme gabarit (pas directement en
+      # nginx.conf) : le fichier contient __RESOLVER__ tant que la
+      # commande ci-dessous ne l'a pas remplacé par l'IP réelle du DNS
+      # interne Podman, différente à chaque réseau.
+      - ./reverse-proxy/nginx.conf:/etc/nginx/nginx.conf.template:ro
+      - ./reverse-proxy/certs:/etc/nginx/certs:ro
+      # Étape 6 (suite) : logo CNAM servi en HTTPS pour les dashboards
+      # Superset — DOMPurify (assainisseur des blocs markdown côté
+      # navigateur) bloque par défaut les images en "data:" URI, une
+      # vraie URL https est nécessaire.
+      - ./reverse-proxy/static-assets:/etc/nginx/assets:ro
+    command: >
+      sh -c "
+        RESOLVER=$$(awk '/^nameserver/{print $$2; exit}' /etc/resolv.conf) &&
+        sed \"s/__RESOLVER__/$$RESOLVER/\" /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf &&
+        exec nginx -g 'daemon off;'
+      "
+    ports:
+      - "3443:3443"
+      - "8443:8443"
+    healthcheck:
+      # wget (busybox) ne gère pas HTTPS correctement dans cette image —
+      # constaté le 2026-09-12 ("Connection refused" alors que curl
+      # fonctionne). curl est présent, on l'utilise à la place.
+      test: ["CMD-SHELL", "curl -skf https://localhost:3443/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
 volumes:
   analytics_data:
+  superset_db_data:
+  kafka_data:
 
 networks:
   default:

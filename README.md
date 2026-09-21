@@ -29,10 +29,10 @@ choix techniques justifiés dans [docs/decisions.md](docs/decisions.md), les dé
 | 1 — Raccordement à `simulateur_V5` (CDC) | ✅ Terminé |
 | 2 — Kafka, Schema Registry, Debezium | ✅ Terminé |
 | 3 — Jobs Flink | ✅ Terminé |
-| 4 — Schéma analytique et KPI | 🔶 En cours — prestations, passages et classements d'assurés faits ; ententes préalables à faire |
-| 5 — Supervision Grafana | ⬜ À faire |
-| 6 — Dashboards Superset | ⬜ À faire |
-| 7 — Sécurité, chiffrement, rôles | ⬜ À faire |
+| 4 — Schéma analytique et KPI | ✅ Terminé |
+| 5 — Supervision Grafana | ✅ Terminé |
+| 6 — Dashboards Superset | ✅ Terminé |
+| 7 — Sécurité, chiffrement, rôles | ✅ Terminé |
 | 8 — Évaluation et comparaison avec l'existant | ⬜ À faire |
 
 Détail complet dans [docs/PLAN.md](docs/PLAN.md).

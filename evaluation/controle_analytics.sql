@@ -108,15 +108,41 @@ FROM kpi_ententes_prealables_jour
 WHERE statut_code = 'sans_reponse';
 
 \echo ''
+\echo '=== 14b. Delai moyen de traitement (KPI 19, corrige le 2026-09-17 : formule ET unite) ==='
+\echo '(exclut les EP sans_reponse du denominateur ; en HEURES, pas en jours -'
+\echo ' voir docs/guides/etape6b_superset_ententes.md et sql/analytics/007_kpi_ep_delai_heures.sql)'
+SELECT
+    ROUND(
+        SUM(delai_moyen_heures * nombre_ententes)
+        / NULLIF(SUM(CASE WHEN delai_moyen_heures IS NOT NULL THEN nombre_ententes ELSE 0 END), 0)
+    , 2) AS delai_moyen_heures
+FROM kpi_ententes_prealables_jour;
+
+\echo ''
 \echo '=== 15. Montant engage par statut (KPI 22) ==='
 SELECT statut_code, SUM(montant_engage_cmu) AS montant_engage_cmu
 FROM kpi_ententes_prealables_jour
 GROUP BY 1 ORDER BY 1;
 
 \echo ''
-\echo '=== 16. Activite par agent, hors validee_office (KPI 20) ==='
+\echo '=== 16. Activite par agent, TOUS TYPES CONFONDUS (diagnostic, pas le KPI 20) ==='
+\echo '(volontairement pas filtre par type - sert a mesurer l ecart avec la section 16b'
+\echo ' ci-dessous, qui elle applique la vraie definition du KPI 20)'
 SELECT COUNT(DISTINCT agent_code) AS agents, SUM(nombre_ententes) AS lignes
 FROM kpi_ententes_prealables_agent_jour;
+
+\echo ''
+\echo '=== 16b. Activite par praticien-conseil, KPI 20 corrige le 2026-09-17 ==='
+\echo '(restreint aux agents AGENT_TYPE_CODE = medecin_conseil, avec nom complet -'
+\echo ' voir sql/analytics/006_dim_agents.sql)'
+SELECT COUNT(DISTINCT agent_code) AS agents_medecin_conseil, SUM(nombre_ententes) AS lignes
+FROM v_kpi_ep_agent_medecin_conseil;
+
+\echo ''
+\echo '=== 16c. Detail nominatif, verification lisibilite (KPI 20) ==='
+SELECT agent_nom_complet, SUM(nombre_ententes) AS nombre_ententes
+FROM v_kpi_ep_agent_medecin_conseil
+GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 
 \echo ''
 \echo '=== 17. EP par type de demande (KPI 21) ==='
@@ -127,3 +153,10 @@ GROUP BY 1 ORDER BY 1;
 \echo ''
 \echo '=== 18. KPI mensuel certifie (mois clos uniquement) ==='
 SELECT * FROM v_kpi_ententes_prealables_mois ORDER BY mois, statut_code;
+
+\echo ''
+\echo '=== 19. Anomalies detectees, par domaine et motif (voir sql/analytics/005_qualite_anomalies.sql) ==='
+SELECT domaine, motif_anomalie, COUNT(*) AS nombre_lignes
+FROM qualite_anomalies
+GROUP BY 1, 2
+ORDER BY 1, 2;

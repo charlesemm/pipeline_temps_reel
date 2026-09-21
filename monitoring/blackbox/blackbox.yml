@@ -1,0 +1,28 @@
+# Configuration blackbox_exporter — étape 7 (suite) : disponibilité des
+# services sans API de statut exploitable directement par Grafana
+# (Superset, Grafana lui-même, Schema Registry, reverse-proxy).
+#
+# Même principe que l'agent JMX de Kafka (docker-compose.yml) : un
+# exportateur léger et dédié plutôt qu'un parsing ad hoc de chaque
+# réponse HTTP, qui ne sont ni toutes au format JSON (Superset renvoie
+# du texte brut "OK") ni toutes en clair (reverse-proxy est en HTTPS,
+# certificat auto-signé).
+
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: []   # défaut : toute réponse 2xx est un succès
+
+  https_2xx_skip_verify:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: []
+      tls_config:
+        # Certificat auto-signé (reverse-proxy/README.md) — attendu ici,
+        # pas une vraie vérification de confiance TLS.
+        insecure_skip_verify: true
