@@ -25,6 +25,21 @@ SET 'table.local-time-zone' = 'UTC';
 -- préalables) : un seul job, un seul état partagé (voir plus bas).
 SET 'pipeline.name' = 'kpi-continu';
 
+-- État sur disque (RocksDB) plutôt qu'en tas JVM — décision du 2026-09-21.
+-- La source est passée à ~790 000 factures, ~535 000 prescriptions et
+-- ~1,57 million de pathologies (remplissage antidaté du SGD) : l'état en
+-- mémoire (HashMap, choix d'origine) ne tenait plus et le TaskManager a fini
+-- en « Heartbeat timed out » (arrêt du job à 17 h 21, docs/decisions.md).
+-- Compagnon : taskmanager.memory.managed.fraction passé de 0.1 à 0.4 dans
+-- docker-compose.yml, car c'est cette mémoire « managée » que RocksDB utilise.
+-- Pas de checkpoint (comme avant) : l'état disparaît avec le TaskManager, le
+-- job repart de earliest-offset, ce qui reste sans effet de bord (UPSERT).
+-- RETOUR à l'état en tas JVM (nuit du 2026-09-21) : mesuré sur ce poste, RocksDB
+-- tombait à ~5 lignes/s après 70 min (disque de la VM : écriture synchrone de
+-- 6 ms) et les jointures n'avaient rien émis. La source a été ramenée à ~100 000
+-- factures (elle ne tenait pas en tas à 345 000) ; voir docs/decisions.md.
+SET 'state.backend.type' = 'hashmap';
+
 -- Étape 7e : les sources Kafka s'authentifient en SASL/SCRAM (utilisateur
 -- « flink », lecture seule de dprest-json.*). Le module JAAS porte le nom
 -- RELOCALISÉ du kafka-clients embarqué dans flink-sql-connector-kafka
@@ -120,6 +135,10 @@ CREATE TABLE factures_src (
 -- (voir flink/sql/pipeline_kpi_hebdo.sql).
 CREATE TABLE ep_src (
     `ENTENTE_PREALABLE_ID`          INT NOT NULL,
+    -- Ajoutée le 2026-09-21 (famille C, KPI 31 à 33) : clé de rattachement
+    -- entente -> facture -> prescriptions/pathologies (H7 de docs/kpi.md).
+    -- Aucune jointure d'état ici : elle sert seulement à alimenter fait_entente_facture.
+    `FACTURE_NUMERO`                STRING,
     `TYPE_DEMANDE_CODE`             STRING,
     `ENTENTE_PREALABLE_DATE_DEBUT`  STRING,
     `event_time` AS TO_TIMESTAMP(
@@ -537,6 +556,237 @@ CREATE TABLE qualite_anomalies (
     'connector' = 'jdbc',
     'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
     'table-name' = 'qualite_anomalies',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+-- ═══════════════════════════════════════════════════════════════
+-- Famille C — prescriptions et pathologies (ajoutée le 2026-09-21)
+-- KPI 25, 27, 30, 31, 32, 33 de docs/kpi.md ; hypothèses H7 à H10.
+--
+-- Volontairement SANS jointure d'état : chaque source est agrégée ou
+-- recopiée seule, les jointures (entente -> facture -> prescription,
+-- dénominations) se font à la lecture dans PostgreSQL
+-- (sql/analytics/010_kpi_clinique.sql). Le TaskManager a déjà dépassé sa
+-- mémoire avec des jointures d'état (docs/decisions.md, 2026-09-17).
+-- Les groupes de consommation gardent le préfixe `flink-kpi-` autorisé par
+-- les ACL Kafka (scripts/kafka-secure-setup.ps1).
+-- ═══════════════════════════════════════════════════════════════
+
+-- Les DATE pures arrivent en entier (jours depuis 1970-01-01, type Debezium
+-- io.debezium.time.Date), comme FACTURE_DATE_SOINS de factures_src.
+CREATE TABLE prescriptions_src (
+    `FACTURE_NUMERO`     STRING NOT NULL,
+    `PRESCRIPTION_CODE`  STRING NOT NULL,
+    `DATE_DEBUT`         INT NOT NULL,
+    `jour_prescription` AS CAST(
+        TO_TIMESTAMP_LTZ(CAST(`DATE_DEBUT` AS BIGINT) * 86400000, 3) AS DATE
+    ),
+    PRIMARY KEY (`FACTURE_NUMERO`, `PRESCRIPTION_CODE`, `DATE_DEBUT`) NOT ENFORCED
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'dprest-json.public.TB_FACTURES_PRESCRIPTIONS',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.security.protocol' = 'SASL_PLAINTEXT',
+    'properties.sasl.mechanism' = 'SCRAM-SHA-512',
+    'properties.sasl.jaas.config' = 'org.apache.flink.kafka.shaded.org.apache.kafka.common.security.scram.ScramLoginModule required username="flink" password="__FLINK_KAFKA_PASSWORD__";',
+    'properties.group.id' = 'flink-kpi-prescriptions',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'debezium-json'
+);
+
+CREATE TABLE pathologies_src (
+    `FACTURE_NUMERO`         STRING NOT NULL,
+    `PATHOLOGIE_CODE`        STRING NOT NULL,
+    `PATHOLOGIE_DATE_DEBUT`  INT NOT NULL,
+    `jour_pathologie` AS CAST(
+        TO_TIMESTAMP_LTZ(CAST(`PATHOLOGIE_DATE_DEBUT` AS BIGINT) * 86400000, 3) AS DATE
+    ),
+    PRIMARY KEY (`FACTURE_NUMERO`, `PATHOLOGIE_CODE`, `PATHOLOGIE_DATE_DEBUT`) NOT ENFORCED
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'dprest-json.public.TB_FACTURES_PATHOLOGIES',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.security.protocol' = 'SASL_PLAINTEXT',
+    'properties.sasl.mechanism' = 'SCRAM-SHA-512',
+    'properties.sasl.jaas.config' = 'org.apache.flink.kafka.shaded.org.apache.kafka.common.security.scram.ScramLoginModule required username="flink" password="__FLINK_KAFKA_PASSWORD__";',
+    'properties.group.id' = 'flink-kpi-pathologies',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'debezium-json'
+);
+
+-- Référentiels : clé Flink = code seul (la source versionne par code + date
+-- de début, mais aucun code n'a plusieurs versions au 2026-09-21).
+CREATE TABLE dim_medicaments_src (
+    `MEDICAMENT_CODE`          STRING NOT NULL,
+    `MEDICAMENT_DENOMINATION`  STRING NOT NULL,
+    `DCI_CODE`                 STRING,
+    PRIMARY KEY (`MEDICAMENT_CODE`) NOT ENFORCED
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'dprest-json.public.TB_REF_MEDICAMENTS',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.security.protocol' = 'SASL_PLAINTEXT',
+    'properties.sasl.mechanism' = 'SCRAM-SHA-512',
+    'properties.sasl.jaas.config' = 'org.apache.flink.kafka.shaded.org.apache.kafka.common.security.scram.ScramLoginModule required username="flink" password="__FLINK_KAFKA_PASSWORD__";',
+    'properties.group.id' = 'flink-kpi-dim-medicaments',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'debezium-json'
+);
+
+CREATE TABLE dim_dci_src (
+    `DCI_CODE`          STRING NOT NULL,
+    `DCI_DENOMINATION`  STRING NOT NULL,
+    PRIMARY KEY (`DCI_CODE`) NOT ENFORCED
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'dprest-json.public.TB_REF_DCI',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.security.protocol' = 'SASL_PLAINTEXT',
+    'properties.sasl.mechanism' = 'SCRAM-SHA-512',
+    'properties.sasl.jaas.config' = 'org.apache.flink.kafka.shaded.org.apache.kafka.common.security.scram.ScramLoginModule required username="flink" password="__FLINK_KAFKA_PASSWORD__";',
+    'properties.group.id' = 'flink-kpi-dim-dci',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'debezium-json'
+);
+
+CREATE TABLE dim_pathologies_src (
+    `PATHOLOGIE_CODE`          STRING NOT NULL,
+    `PATHOLOGIE_DENOMINATION`  STRING NOT NULL,
+    PRIMARY KEY (`PATHOLOGIE_CODE`) NOT ENFORCED
+) WITH (
+    'connector' = 'kafka',
+    'topic' = 'dprest-json.public.TB_REF_PATHOLOGIES',
+    'properties.bootstrap.servers' = 'kafka:9092',
+    'properties.security.protocol' = 'SASL_PLAINTEXT',
+    'properties.sasl.mechanism' = 'SCRAM-SHA-512',
+    'properties.sasl.jaas.config' = 'org.apache.flink.kafka.shaded.org.apache.kafka.common.security.scram.ScramLoginModule required username="flink" password="__FLINK_KAFKA_PASSWORD__";',
+    'properties.group.id' = 'flink-kpi-dim-pathologies',
+    'scan.startup.mode' = 'earliest-offset',
+    'format' = 'debezium-json'
+);
+
+-- ── Cibles de la famille C ────────────────────────────────────────
+CREATE TABLE kpi_prescriptions_medicament_jour (
+    jour                  DATE NOT NULL,
+    medicament_code       STRING NOT NULL,
+    nombre_prescriptions  BIGINT,
+    PRIMARY KEY (jour, medicament_code) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'kpi_prescriptions_medicament_jour',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+CREATE TABLE kpi_pathologies_jour (
+    jour                DATE NOT NULL,
+    pathologie_code     STRING NOT NULL,
+    nombre_pathologies  BIGINT,
+    PRIMARY KEY (jour, pathologie_code) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'kpi_pathologies_jour',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+CREATE TABLE fait_prescriptions (
+    facture_numero     STRING NOT NULL,
+    prescription_code  STRING NOT NULL,
+    date_debut         DATE NOT NULL,
+    PRIMARY KEY (facture_numero, prescription_code, date_debut) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'fait_prescriptions',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+CREATE TABLE fait_pathologies (
+    facture_numero   STRING NOT NULL,
+    pathologie_code  STRING NOT NULL,
+    date_debut       DATE NOT NULL,
+    PRIMARY KEY (facture_numero, pathologie_code, date_debut) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'fait_pathologies',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+CREATE TABLE fait_entente_facture (
+    entente_prealable_id  INT NOT NULL,
+    facture_numero        STRING,
+    type_demande_code     STRING,
+    date_debut            DATE,
+    PRIMARY KEY (entente_prealable_id) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'fait_entente_facture',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+CREATE TABLE fait_entente_statut (
+    entente_prealable_id  INT NOT NULL,
+    statut_code           STRING,
+    PRIMARY KEY (entente_prealable_id) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'fait_entente_statut',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+CREATE TABLE dim_medicaments (
+    medicament_code          STRING NOT NULL,
+    medicament_denomination  STRING NOT NULL,
+    dci_code                 STRING,
+    PRIMARY KEY (medicament_code) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'dim_medicaments',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+CREATE TABLE dim_dci (
+    dci_code          STRING NOT NULL,
+    dci_denomination  STRING NOT NULL,
+    PRIMARY KEY (dci_code) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'dim_dci',
+    'username' = 'flink_writer',
+    'password' = '__FLINK_WRITER_PASSWORD__',
+    'sink.parallelism' = '1'
+);
+
+CREATE TABLE dim_pathologies (
+    pathologie_code          STRING NOT NULL,
+    pathologie_denomination  STRING NOT NULL,
+    PRIMARY KEY (pathologie_code) NOT ENFORCED
+) WITH (
+    'connector' = 'jdbc',
+    'url' = 'jdbc:postgresql://postgres-analytics:5432/dprest_analytics',
+    'table-name' = 'dim_pathologies',
     'username' = 'flink_writer',
     'password' = '__FLINK_WRITER_PASSWORD__',
     'sink.parallelism' = '1'
@@ -1071,5 +1321,77 @@ WHERE `ASSURE_NOM` = ''
         `date_naissance` > CURRENT_DATE
         OR `date_naissance` < CURRENT_DATE - INTERVAL '100' YEAR(3)
    ));
+
+-- ═══════════════════════════════════════════════════════════════
+-- Famille C — prescriptions et pathologies (2026-09-21)
+-- Agrégats (KPI 25, 27, 30), copies 1:1 (KPI 31 à 33) et référentiels.
+-- Aucune jointure : voir le bloc de définition des sources plus haut.
+-- ═══════════════════════════════════════════════════════════════
+
+-- KPI 25 et 27 : lignes de prescription par jour (H9 : DATE_DEBUT) et médicament.
+INSERT INTO kpi_prescriptions_medicament_jour
+SELECT
+    jour_prescription,
+    `PRESCRIPTION_CODE`,
+    COUNT(*) AS nombre_prescriptions
+FROM prescriptions_src
+GROUP BY jour_prescription, `PRESCRIPTION_CODE`;
+
+-- KPI 30 : pathologies déclarées par jour et par pathologie.
+INSERT INTO kpi_pathologies_jour
+SELECT
+    jour_pathologie,
+    `PATHOLOGIE_CODE`,
+    COUNT(*) AS nombre_pathologies
+FROM pathologies_src
+GROUP BY jour_pathologie, `PATHOLOGIE_CODE`;
+
+-- KPI 31 à 33 : copies 1:1, jointes à la lecture (sql/analytics/010_kpi_clinique.sql).
+INSERT INTO fait_prescriptions
+SELECT
+    `FACTURE_NUMERO`,
+    `PRESCRIPTION_CODE`,
+    jour_prescription
+FROM prescriptions_src;
+
+INSERT INTO fait_pathologies
+SELECT
+    `FACTURE_NUMERO`,
+    `PATHOLOGIE_CODE`,
+    jour_pathologie
+FROM pathologies_src;
+
+INSERT INTO fait_entente_facture
+SELECT
+    `ENTENTE_PREALABLE_ID`,
+    `FACTURE_NUMERO`,
+    `TYPE_DEMANDE_CODE`,
+    CAST(`event_time` AS DATE)
+FROM ep_src;
+
+INSERT INTO fait_entente_statut
+SELECT
+    `ENTENTE_PREALABLE_ID`,
+    `STATUT_CODE`
+FROM ep_statuts_src;
+
+INSERT INTO dim_medicaments
+SELECT
+    `MEDICAMENT_CODE`,
+    `MEDICAMENT_DENOMINATION`,
+    `DCI_CODE`
+FROM dim_medicaments_src;
+
+INSERT INTO dim_dci
+SELECT
+    `DCI_CODE`,
+    `DCI_DENOMINATION`
+FROM dim_dci_src;
+
+INSERT INTO dim_pathologies
+SELECT
+    `PATHOLOGIE_CODE`,
+    `PATHOLOGIE_DENOMINATION`
+FROM dim_pathologies_src;
 
 END;

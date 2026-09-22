@@ -66,9 +66,28 @@ Historisent respectivement les rejets (`REJET_CODE`, période `REJET_DATE_DEBUT`
 Mathieu avant de figer la définition du « taux de rejet » : rejet de facture vs rejet de prestation ne
 sont pas forcément le même KPI.
 
-### `TB_FACTURES_PATHOLOGIES`, `TB_FACTURES_PRESCRIPTIONS`
-Détails cliniques rattachés à une facture (pathologies codées, prescriptions de médicaments) — hors
-périmètre des KPI DPREST identifiés dans `CLAUDE.md`, à garder pour mémoire si un KPI clinique émerge.
+### `TB_FACTURES_PATHOLOGIES`, `TB_FACTURES_PRESCRIPTIONS` — détails cliniques (famille C)
+Détails cliniques rattachés à une facture. **Intégrés au périmètre CDC le 2026-09-21** (KPI 25, 27, 30 à
+33 de `docs/kpi.md`), avec leurs référentiels `TB_REF_MEDICAMENTS`, `TB_REF_PATHOLOGIES` et `TB_REF_DCI`.
+**Données de santé sensibles** (loi n°2013-450) : voir les hypothèses H7 à H10 de `docs/kpi.md`.
+
+| Table | Clé primaire | Colonnes utiles | Remarques constatées le 2026-09-21 |
+|---|---|---|---|
+| `TB_FACTURES_PRESCRIPTIONS` | `FACTURE_NUMERO` + `PRESCRIPTION_CODE` + `DATE_DEBUT` | `PRESCRIPTION_CODE` = code médicament (référentiel `TB_REF_MEDICAMENTS`, sans clé étrangère déclarée mais 100 % de correspondance) ; `PRESCRIPTION_QUANTITE` | Au plus une prescription par facture ; `PRESCRIPTION_QUANTITE` toujours égal à 1 (H8) ; 68 271 lignes (125 325 avant la réduction du volume du 2026-09-21). `DATE_DEBUT` est un `DATE` pur (entier de jours côté Debezium). |
+| `TB_FACTURES_PATHOLOGIES` | `FACTURE_NUMERO` + `PATHOLOGIE_CODE` + `PATHOLOGIE_DATE_DEBUT` | `PATHOLOGIE_CODE` (3 caractères) | En moyenne 2 pathologies par facture ; 200 430 lignes, 100 codes (367 003 avant la réduction du volume du 2026-09-21). Clé étrangère vers `TB_REF_PATHOLOGIES` (code + date de début). |
+| `TB_REF_MEDICAMENTS` | `MEDICAMENT_CODE` + `MEDICAMENT_DATE_DEBUT` | `MEDICAMENT_DENOMINATION`, `DCI_CODE` | Versionné par date, mais aucun code n'a plusieurs versions (918 / 918) : clé réduite au code côté Flink. |
+| `TB_REF_PATHOLOGIES` | `PATHOLOGIE_CODE` + `PATHOLOGIE_DATE_DEBUT` | `PATHOLOGIE_DENOMINATION` | Idem : 100 codes, une seule version chacun. |
+| `TB_REF_DCI` | `DCI_CODE` | `DCI_DENOMINATION` | 149 codes. Répliquée, pas encore utilisée par un KPI (disponible pour une ventilation par principe actif). |
+
+`TB_ENTENTES_PREALABLES.FACTURE_NUMERO` relie chaque entente à une facture, donc à ses prescriptions et
+pathologies (H7) : c'est le seul lien entre la famille B et la famille C.
+
+**Côté analytique** (`sql/analytics/010_kpi_clinique.sql`) : `dim_medicaments`, `dim_dci`, `dim_pathologies`
+(dénominations) ; `kpi_prescriptions_medicament_jour` et `kpi_pathologies_jour` (agrégats journaliers
+Flink) ; `fait_prescriptions`, `fait_pathologies`, `fait_entente_facture`, `fait_entente_statut` (copies
+1:1, **sans assuré**, réservées au SGD) ; vues masquées `v_kpi_prescriptions_jour`, `v_top10_medicaments`, `v_top10_pathologies`,
+`v_kpi_ep_prescriptions`, `v_kpi_ep_medicaments`, `v_kpi_ep_pathologies` (seules lues par la DPREST,
+regroupements < 5 supprimés, H10) et vue interne `v_ep_clinique_detail`.
 
 ## Tables métier — ententes préalables (KPI mensuel)
 

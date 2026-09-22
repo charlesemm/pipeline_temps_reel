@@ -242,6 +242,14 @@ services:
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 2
         jobmanager.memory.process.size: 1024m
+        # 2026-09-21 : délais RPC allongés. Avec l'état sur RocksDB, le
+        # déploiement d'une quarantaine de tâches (une base RocksDB par
+        # opérateur à état) dépasse les 10 s par défaut : « Cannot deploy task
+        # ... Ask timed out after [10000 ms] ». Le heartbeat de 50 s par défaut
+        # avait aussi expiré à 17 h 21 sur un TaskManager saturé. Voir
+        # docs/decisions.md, entrée du 2026-09-21 (soir).
+        pekko.ask.timeout: 60 s
+        heartbeat.timeout: 180000
         # Étape 5 : expose /metrics au format Prometheus sur le port 9249,
         # lu par le service prometheus ci-dessous.
         metrics.reporters: prom
@@ -280,11 +288,28 @@ services:
         # ep_enrichies — voir flink/sql/kpi_prestations.sql) ont refait
         # dépasser le tas disponible -> nouvel OutOfMemoryError. Voir
         # docs/decisions.md, entrée du 2026-09-17.
-        taskmanager.memory.process.size: 2304m
-        # La mémoire « managée » sert surtout à RocksDB, non utilisé ici
-        # (état en mémoire). La réduire de 40 % à 10 % rend ~230 Mo au
-        # traitement sans consommer un octet de plus sur la machine.
+        # 2026-09-21 (nuit) : 2304m -> 3840m avec le retour de l'état en tas JVM
+        # (voir plus bas). À 3072m le TaskManager a de nouveau cessé de répondre
+        # à 91 % des pathologies (VM de 7 Go : swap de 2 Go épuisé, 1,2 Go
+        # disponible). Pendant le rattrapage, les conteneurs non essentiels
+        # (AKHQ, Grafana, Prometheus, blackbox, Kafka Connect) sont arrêtés
+        # pour libérer ~1,2 Go ; voir docs/decisions.md.
+        taskmanager.memory.process.size: 3840m
+        # La mémoire « managée » sert surtout à RocksDB. Réduite de 40 % à
+        # 10 % tant que l'état restait en tas JVM ; REMONTÉE à 40 % le
+        # 2026-09-21 : le job passe sur RocksDB (SET 'state.backend.type'
+        # dans flink/sql/kpi_prestations.sql) car l'état ne tient plus en tas
+        # à ~790 000 factures / ~1,57 M pathologies (TaskManager en « Heartbeat
+        # timed out »). Voir docs/decisions.md, entrée du 2026-09-21. Retour
+        # arrière : remettre 0.1 et retirer le SET du fichier SQL.
+        # RETOUR à 0.1 (nuit du 2026-09-21) : l'état RocksDB s'est révélé
+        # inutilisable sur ce poste (~5 lignes/s après 70 min, écritures
+        # synchrones de 6 ms sur le disque de la VM). La source ayant été
+        # ramenée à ~100 000 factures, l'état en tas est retenté.
         taskmanager.memory.managed.fraction: 0.1
+        # Mêmes délais que le JobManager (voir plus haut).
+        pekko.ask.timeout: 60 s
+        heartbeat.timeout: 180000
         # Étape 5 : même exportateur que le JobManager (débit,
         # enregistrements traités, tas JVM du TaskManager).
         metrics.reporters: prom

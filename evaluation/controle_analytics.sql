@@ -160,3 +160,54 @@ SELECT domaine, motif_anomalie, COUNT(*) AS nombre_lignes
 FROM qualite_anomalies
 GROUP BY 1, 2
 ORDER BY 1, 2;
+
+\echo ''
+\echo '=== 20. Prescriptions par jour (KPI 25, famille C) ==='
+SELECT
+    jour,
+    SUM(nombre_prescriptions)  AS nombre_prescriptions
+FROM kpi_prescriptions_medicament_jour
+GROUP BY 1 ORDER BY 1;
+
+\echo ''
+\echo '=== 21. Top 10 medicaments prescrits, code + effectif (KPI 27, non masque) ==='
+SELECT
+    medicament_code,
+    SUM(nombre_prescriptions)  AS nombre_prescriptions
+FROM kpi_prescriptions_medicament_jour
+GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10;
+
+\echo ''
+\echo '=== 22. Top 10 pathologies, code + effectif (KPI 30, non masque) ==='
+SELECT
+    pathologie_code,
+    SUM(nombre_pathologies)  AS nombre_pathologies
+FROM kpi_pathologies_jour
+GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10;
+
+\echo ''
+\echo '=== 23. Ententes avec prescription associee, par type et statut (KPI 31, non masque : vue interne SGD) ==='
+SELECT
+    type_demande_code,
+    statut_code,
+    COUNT(*)                                          AS nombre_ententes,
+    COUNT(*) FILTER (WHERE nombre_prescriptions > 0)  AS ententes_avec_prescription
+FROM v_ep_clinique_detail
+GROUP BY 1, 2 ORDER BY 1, 2;
+
+\echo ''
+\echo '=== 24. Medicaments et pathologies portes par les ententes, par statut (KPI 32 et 33, non masque) ==='
+SELECT
+    statut_code,
+    SUM(nombre_prescriptions)  AS nombre_medicaments_prescrits,
+    SUM(nombre_pathologies)    AS nombre_pathologies
+FROM v_ep_clinique_detail
+GROUP BY 1 ORDER BY 1;
+
+\echo ''
+\echo '=== 25. Controle IDEMPOTENCE famille C : aucune cle ne doit etre dupliquee (attendu : 0 ligne) ==='
+SELECT 'fait_prescriptions' AS table_controlee, COUNT(*) AS doublons FROM (
+    SELECT facture_numero, prescription_code, date_debut FROM fait_prescriptions GROUP BY 1, 2, 3 HAVING COUNT(*) > 1) d
+UNION ALL
+SELECT 'kpi_prescriptions_medicament_jour', COUNT(*) FROM (
+    SELECT jour, medicament_code FROM kpi_prescriptions_medicament_jour GROUP BY 1, 2 HAVING COUNT(*) > 1) d;

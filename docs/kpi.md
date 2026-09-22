@@ -42,6 +42,10 @@ la DPREST, dont les décisions se prennent au jour ou à la semaine.
 | H4 | Une entente préalable est **« sans réponse »** si aucune ligne n'existe pour elle dans `TB_ENTENTES_PREALABLES_STATUTS`. | Aucun statut explicite « en attente » n'existe dans les données. |
 | H5 | Les statuts `acceptee`, `refusee` et `validee_office` sont tous **terminaux** (une EP qui en porte un est considérée traitée). | Aucune EP ne porte plusieurs statuts successifs dans les données observées. |
 | H6 | **Un passage = une facture.** Un assuré qui vient plusieurs fois est compté à chaque venue (décision de Mathieu, 2026-09-11). | Le schéma ne porte pas de notion de « venue » distincte de la facture. Conséquence : KPI 2 et KPI 4 sont fusionnés. |
+| H7 | **Un médicament ou une pathologie « d'une entente préalable » est celui de la facture qui lui est rattachée** (`TB_ENTENTES_PREALABLES.FACTURE_NUMERO`). | La source ne relie pas directement une entente à une prescription : le lien passe par la facture. Constaté le 2026-09-21 (à deux volumes : 106 392 puis 57 928 ententes) : toutes portent un `FACTURE_NUMERO` qui existe, et aucune facture n'est liée à deux ententes (pas de double comptage). **À confirmer avec le métier** : dans MIRKA, ce rattachement a-t-il la même portée ? |
+| H8 | **« Nombre de médicaments prescrits » = nombre de lignes de prescription**, pas un nombre de boîtes. | `PRESCRIPTION_QUANTITE` vaut 1 sur 100 % des lignes du simulateur (125 325 puis 68 271 lignes mesurées) (minimum = maximum = 1) et une facture porte au plus une prescription : la sommer n'apporterait rien. Si le générateur évolue, revoir cette définition. |
+| H9 | La **date de référence** des KPI cliniques est la date de début de la prescription (`DATE_DEBUT`) ou de la pathologie (`PATHOLOGIE_DATE_DEBUT`), pas le jour de soins de la facture (H2). | Évite une jointure d'état supplémentaire dans Flink (mémoire déjà tendue, voir `docs/decisions.md`). L'écart avec le jour de soins est à mesurer avant toute comparaison avec la famille A. |
+| H10 | **Seuil de confidentialité : les regroupements de moins de 5 sont masqués** dans les vues lues par la DPREST (`role_kpi_lecture`). | Donnée de santé sensible (loi n°2013-450) : un effectif très faible peut ré-identifier une personne. Les tables de base, non masquées, sont réservées au SGD. |
 
 ---
 
@@ -135,6 +139,41 @@ refusées, 38 validées d'office ; montant engagé 6 818 035 F / 0 F / 684 900 F
 
 ---
 
+# Famille C — Prescriptions et pathologies (KPI cliniques)
+
+Ajoutée le 2026-09-21. **Données de santé sensibles** (loi n°2013-450) : aucun identifiant d'assuré
+n'est stocké ; seuls des comptages par médicament ou pathologie, et un lien par numéro de facture
+pour les KPI 31 à 33 (voir H7 et H10).
+
+**Sources** : `TB_FACTURES_PRESCRIPTIONS`, `TB_FACTURES_PATHOLOGIES` et leurs référentiels
+(`TB_REF_MEDICAMENTS`, `TB_REF_PATHOLOGIES`), reliées aux ententes préalables par `FACTURE_NUMERO`.
+**Granularité de stockage** : jour × médicament (KPI 25, 27) et jour × pathologie (KPI 30) pour les
+agrégats Flink ; niveau ligne (numéro de facture, sans assuré) pour les KPI 31 à 33, joints **à la lecture**
+dans PostgreSQL et non dans Flink (économie d'état mémoire, même choix que pour les noms de centres).
+**Tables cibles** : `kpi_prescriptions_medicament_jour`, `kpi_pathologies_jour` (agrégats continus Flink) ;
+`fait_prescriptions`, `fait_pathologies`, `fait_entente_facture`, `fait_entente_statut` (lignes 1:1 depuis
+la source, réservées au SGD) ; vues `v_kpi_prescriptions_jour`, `v_top10_medicaments`, `v_top10_pathologies`, `v_kpi_ep_prescriptions`,
+`v_kpi_ep_medicaments`, `v_kpi_ep_pathologies` (masquées, H10).
+
+| # | KPI | Formule | Valeur constatée (2026-09-21) |
+|---|---|---|---|
+| 25 | Nombre de médicaments prescrits | `COUNT(*)` sur `TB_FACTURES_PRESCRIPTIONS`, daté par `DATE_DEBUT` (voir H8, H9) | 68 271 lignes de prescription sur 15 jours (du 2026-09-07 au 2026-09-21) ; 918 médicaments distincts |
+| 27 | Top 10 des médicaments prescrits | classement calculé à la lecture : `SUM(nombre_prescriptions) GROUP BY médicament`, dénomination jointe depuis `TB_REF_MEDICAMENTS` | tête de classement à 101 prescriptions, 10e à 95 (écart de 6 %, non significatif, voir limite 6) |
+| 30 | Top 10 des pathologies | classement à la lecture : `SUM(nombre_pathologies) GROUP BY pathologie`, dénomination jointe depuis `TB_REF_PATHOLOGIES` | 200 430 lignes de pathologie, 100 pathologies ; tête à 2 135, 10e à 2 062 (écart de 3,5 %) |
+| 31 | Ententes avec prescription associée | `EP dont la facture porte ≥ 1 prescription / EP totales × 100`, par type de demande et par statut (voir H7) | 37 159 / 57 928, soit 64,1 % (64,6 % à 106 392 ententes, 59,9 % sur un petit échantillon : le taux se stabilise autour de 64 %) |
+| 32 | Médicaments prescrits sur les ententes | `COUNT(*)` des prescriptions des factures liées à une EP, par statut (acceptée, refusée, validée d'office, sans réponse ; H4) | acceptée 29 324 · refusée 5 251 · validée d'office 2 581 · sans réponse 3 (référence source, `evaluation/controle_source.sql` § 24, identique à l'analytique) |
+| 33 | Pathologies des ententes | `COUNT(*)` des pathologies des factures liées à une EP, par pathologie et par statut | total par statut : acceptée 91 762 · refusée 16 150 · validée d'office 7 986 · sans réponse 6 ; le détail par pathologie n'a pas de valeur de référence (répartition quasi uniforme, limite 6) |
+
+> **KPI 33, prudence d'interprétation** : comparer les pathologies des ententes refusées à celles des
+> ententes acceptées est une **corrélation**, pas une explication. Les données sont synthétiques et
+> tirées de façon quasi uniforme : aucune conclusion clinique ne peut en être tirée (limite 6).
+>
+> **KPI 31, périmètre** : le taux porte sur les ententes dont la facture existe (57 928 / 57 928 à la
+> date de mesure). Une entente dont la facture serait absente serait comptée comme « sans prescription »,
+> ce qui biaiserait le taux à la baisse.
+
+---
+
 # Tables cibles (schéma analytique)
 
 | Table | Alimentation | Grain | Comportement |
@@ -146,6 +185,10 @@ refusées, 38 validées d'office ; montant engagé 6 818 035 F / 0 F / 684 900 F
 | `kpi_ententes_prealables_jour` | Flink, agrégat continu | jour × statut × type de demande | Temps réel |
 | `kpi_ententes_prealables_agent_jour` | Flink, agrégat continu | jour × agent × statut | Temps réel (KPI 20), hors `validee_office` |
 | `v_kpi_ententes_prealables_mois` | Vue SQL, dérivée du grain jour | mois × statut | **Changé le 2026-09-11** : vue plutôt que fenêtre Flink (voir `docs/decisions.md`) ; ne porte que sur les mois entièrement clos |
+| `kpi_prescriptions_medicament_jour` | Flink, agrégat continu | jour × médicament | Temps réel (KPI 25, 27). Réservée au SGD |
+| `kpi_pathologies_jour` | Flink, agrégat continu | jour × pathologie | Temps réel (KPI 30). Réservée au SGD |
+| `fait_prescriptions`, `fait_pathologies`, `fait_entente_facture`, `fait_entente_statut` | Flink, copie 1:1 de la source | une ligne source | Jointure faite à la lecture (KPI 31 à 33). Réservées au SGD |
+| `dim_medicaments`, `dim_dci`, `dim_pathologies` | Flink, UPSERT depuis le référentiel | code | Dénominations pour les classements |
 
 **Idempotence** : écriture en `UPSERT` sur la clé primaire (grain + dimensions). Relancer un job,
 rejouer le topic depuis le début ou redémarrer le pipeline ne duplique ni ne fausse aucune ligne —
@@ -171,3 +214,7 @@ centime près (56 481 prestations / 564 810 000 F).
 4. **Montants uniformes** : toutes les prestations sont facturées 10 000 F. Les KPI de dispersion
    (montant médian, écart-type, valeurs aberrantes) n'auraient aucun sens sur ces données.
 5. **Régime complémentaire non simulé** : colonne `PRESTATION_MONTANT_COMPLEMENTAIRE` toujours nulle.
+6. **Données cliniques synthétiques quasi uniformes** (famille C) : au 2026-09-21, 918 médicaments pour
+   68 271 prescriptions, tête de classement à 101 contre 95 pour le dixième ; 100 pathologies
+   réparties presque à parts égales (2 135 contre 2 062). Les classements des KPI 27 et 30 démontrent
+   le mécanisme, ils ne portent aucune information épidémiologique. La quantité prescrite vaut toujours 1 (H8).

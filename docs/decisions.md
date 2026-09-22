@@ -950,3 +950,159 @@ séparation des rôles (7d) et non sur le hachage. Aujourd'hui les tops d'assur�
 concordance exacte source/analytique après rejeu complet du job (2 118 prestations, 2 119 factures).
 
 **Retour arrière Kafka** : fichiers d'origine dans `backups/pre-sasl/` (voir guide 7e).
+
+## 2026-09-21 — Famille C : prescriptions et pathologies (KPI 25, 27, 30 à 33)
+
+**Besoin** : le SGD veut compter les médicaments prescrits, et les médicaments/pathologies rattachés aux
+ententes préalables. `TB_FACTURES_PRESCRIPTIONS` et `TB_FACTURES_PATHOLOGIES` étaient jusque-là hors périmètre
+CDC (dictionnaire de données). KPI retenus après exploration de la source : 25, 27, 30, 31, 32, 33 (les KPI 26,
+28 et 29 — taux de prescription, prescriptions par DCI, coût théorique — ont été écartés par le SGD).
+
+**Exploration avant conception** (source au 2026-09-21, 183 725 factures) : une facture porte au plus une
+prescription ; `PRESCRIPTION_QUANTITE` vaut toujours 1 ; les 918 médicaments prescrits sont tous au
+référentiel ; les 106 392 ententes portent un `FACTURE_NUMERO` existant, sans facture partagée entre deux
+ententes ; aucune entente n'a plusieurs statuts. **Point structurant** : les ententes n'ont **pas** de
+médicaments propres (`TB_ENTENTES_PREALABLES_PRESTATIONS` vide, `..._ACTES_MEDICAUX` contient des actes) ; le
+rattachement passe par la facture (hypothèse H7, à confirmer avec le métier).
+
+**Décision — pas de jointure d'état dans Flink** : Flink agrège (KPI 25, 27, 30) ou recopie 1:1 (KPI 31 à 33) ;
+les jointures entente -> facture -> prescription se font à la lecture, dans des vues PostgreSQL
+(`sql/analytics/010_kpi_clinique.sql`). Raison : le TaskManager a déjà dépassé sa mémoire à cause de jointures
+d'état (2026-09-11 et 2026-09-17). Alternative écartée : joindre `ep_enrichies` aux prescriptions dans Flink
+(un opérateur d'état de plus sur ~100 000 ententes).
+
+**Décision — séparation des accès (H10)** : trois niveaux. Dimensions lisibles par la DPREST ; agrégats et
+faits (numéro de facture, jamais l'assuré) réservés au SGD (`role_qualite_nominatif`) ; vues masquées
+(regroupements < 5 supprimés) seules exposées à la DPREST (`role_kpi_lecture`). Données de santé sensibles
+(loi n°2013-450). Limite assumée : les vues masquées portent sur toute la période ; une période libre n'est
+disponible que côté SGD.
+
+**Correction découverte pendant la vérification des droits** : un droit par défaut posé plus tôt le même jour
+(`ALTER DEFAULT PRIVILEGES FOR ROLE dprest ... GRANT SELECT ON TABLES TO dprest_lecture`) donnait à la DPREST
+un `SELECT` sur toute nouvelle table, `fait_prescriptions` comprise, ce qui contournait le masquage et
+contredisait l'étape 7d. Retiré et révoqué explicitement dans `010` ; vérifié avec une vraie connexion
+(`permission denied` sur les tables sensibles, vues masquées lisibles, anciens KPI intacts).
+
+**Autre écart comblé** : `REPLICA IDENTITY FULL` n'était dans aucune migration (cause de la panne Flink du
+2026-09-21 après recréation de la base). Désormais versionné : `sql/source/001_replica_identity_cdc.sql`
+(18 tables), avec un test qui échoue si une table suivie par CDC n'y figure pas.
+
+**Vérifié** : logique des vues sur un jeu de test contrôlé (66,7 %, 5 médicaments, 9 et 6 pathologies,
+regroupements < 5 masqués, « sans réponse » géré), transaction annulée ; `EXPLAIN STATEMENT SET` du job Flink
+complet (9 nouveaux sinks planifiés, rien soumis) ; 12 tests de cohérence (`tests/test_famille_c.py`), dont un
+vérifié par mutation ; requêtes de contrôle source/analytique ajoutées (`evaluation/`, sections 20 à 25).
+
+**Non fait à ce stade** : déploiement (reset du connecteur, resoumission du job) — voir
+`docs/guides/famille_c_deploiement.md` ; dashboard Superset « Clinique » ; lint `ruff` (non installé sur le poste).
+
+**Risque à surveiller** : le snapshot ajoute ~490 000 lignes cliniques (125 325 prescriptions + 367 003
+pathologies) aux ~100 000 assurés et ~180 000 factures déjà en état Flink. Si le TaskManager (2 304 Mo)
+retombe en OutOfMemoryError : retirer d'abord `fait_pathologies` (la plus volumineuse), puis envisager
+RocksDB ou plus de mémoire.
+
+## 2026-09-21 (soir) — Flink : état sur RocksDB au lieu du tas JVM
+
+**Constat** : le job `kpi-continu` tournait depuis 13 h 37 quand le SGD a lancé un remplissage antidaté de la
+source. Il s'est arrêté à 17 h 21 sur `Heartbeat of TaskManager ... timed out` (conteneur non tué par
+manque de mémoire, `OOMKilled=false` : le JVM ne répondait plus, typique d'un tas saturé). À ce moment la
+source comptait ~345 000 factures ; elle a fini à 786 229 factures, 535 119 prescriptions,
+**1 570 852 pathologies**, 456 250 ententes, 786 226 prestations. Les KPI de la base analytique sont restés
+figés à 17 h 21 pendant environ une heure.
+
+**Cause** : l'état de Flink (dédoublonnage CDC de chaque source, deux jointures, agrégats) est gardé en tas
+JVM (HashMapStateBackend). Il croît avec le nombre de lignes source ; à 786 000 factures il dépasse les
+~685 Mo de tas disponibles. Les ajouts de la famille C (~2,1 millions de lignes cliniques, surtout
+pathologies) l'auraient aggravé (voir l'entrée précédente, « Risque à surveiller »).
+
+**Décision** : `SET 'state.backend.type' = 'rocksdb'` dans `flink/sql/kpi_prestations.sql`, et
+`taskmanager.memory.managed.fraction` de 0.1 à 0.4 dans `docker-compose.yml` (RocksDB utilise la mémoire
+managée). Constaté après recréation du TaskManager : tas 685 Mo, mémoire managée 762 Mo, réseau 191 Mo.
+RocksDB est inclus dans `flink-dist-1.19.1.jar` (vérifié), rien à installer. C'était l'alternative déjà
+annoncée dans le commentaire du compose (« la mémoire managée sert surtout à RocksDB »).
+
+**Alternatives écartées** : augmenter `taskmanager.memory.process.size` (la VM dispose de 7 Go, déjà
+occupée par Kafka Connect ~1,8 Go, Kafka, Superset…) ; retirer `fait_pathologies` (règle le volume clinique,
+pas celui de la famille A, déjà en cause avant les ajouts).
+
+**Compromis** : RocksDB est plus lent qu'un accès mémoire et écrit dans `/tmp` du TaskManager. Pas de
+checkpoint (inchangé) : l'état disparaît avec le TaskManager, le job repart de `earliest-offset`, sans effet
+de bord (écriture en UPSERT). La reprise après incident est donc plus longue qu'avec peu de données, ce qui
+est un point à mesurer au chapitre 7 (critère « reprise après incident »).
+
+**Retour arrière** : remettre `0.1` dans le compose (`podman compose up -d --no-deps flink-taskmanager`)
+et retirer le `SET` du fichier SQL.
+
+**Aussi observé ce jour** : Kafka a été marqué `unhealthy` (129 échecs, code 125) et la connexion SSH à la VM
+Podman s'est coupée à plusieurs reprises pendant la charge ; les deux se sont rétablis d'eux-mêmes
+(Kafka `healthy` à 18 h 12). Cause non identifiée : à surveiller si cela se reproduit.
+
+## 2026-09-22 (nuit) — Réduction du volume de la source, retour à l'état en tas, limites de capacité mesurées
+
+**Contexte** : le SGD a rempli la source avec des données antidatées (786 229 factures sur 16 semaines de
+49 000, 535 119 prescriptions, 1 570 852 pathologies, 456 250 ententes). Le pipeline, dimensionné pour ~60 000
+à 300 000 factures, n'a pas pu les absorber. Chronologie et mesures ci-dessous.
+
+**Mesures** (VM Podman de 7 Go, 4 processeurs, disque virtuel WSL2) :
+- État en tas JVM à ~345 000 factures : arrêt du job à 17 h 21 (« Heartbeat of TaskManager timed out »).
+- État RocksDB (passage du 2026-09-21 soir) : le job tient mais avance à **30-40 lignes/s** par flux, puis
+  ~5 lignes/s après 70 min ; `kpi_prestations_jour` restait à 0 (les 4 jointures n'avaient rien émis). Cause
+  mesurée : écriture synchrone de **6 ms** sur le disque de la VM (contre 6 µs en mémoire), attente disque de
+  19 %, charge de 6 à 10 sur 4 processeurs. Durée extrapolée pour 786 000 factures : > 10 h.
+- Dans les deux cas, la VM manquait de mémoire : swap de 2 Go épuisé, 1,2 Go disponible (relevé de 00 h 00).
+  La machine hôte (15,6 Go) n'avait que 0,8 Go libre : agrandir la VM n'était pas possible.
+
+**Décision 1 — réduire la source** (choix du SGD, option recommandée) : suppression des factures dont la date de
+soins est antérieure au **2026-09-07**, avec leurs prestations, statuts, prescriptions, pathologies et les
+ententes rattachées. Résultat : 100 229 factures, 57 928 ententes (686 000 et 398 322 supprimées). Sauvegarde
+préalable complète : `backups/echo_db_avant_purge_20260921_190243.dump`. Garde-fous : transaction unique,
+effectifs contrôlés avant et après, annulation intégrale sinon.
+**Contrepartie** : aucun mois calendaire clos dans les données (07-21 septembre) : la vue certifiée
+`v_kpi_ententes_prealables_mois` reste vide.
+
+**Piège découvert : deux clés étrangères sans index.** `TB_ENTENTES_PREALABLES.FACTURE_NUMERO` et
+`TB_FACTURES.ENTENTE_PREALABLE_ID` (références croisées, sans suppression en cascade) n'ont pas d'index : chaque
+ligne supprimée forçait une lecture complète de la table liée. Première tentative annulée après 11 min ; la
+seconde, avec deux index **temporaires** créés et supprimés dans la même transaction, a pris 15 min 32 s pour
+la dernière instruction (~1 million de contrôles de clés). Le schéma de la source est resté inchangé. À
+ajouter aux migrations du simulateur si une purge devait être répétée.
+
+**Décision 2 — retour à l'état en tas JVM** (`SET 'state.backend.type' = 'hashmap'`,
+`taskmanager.memory.managed.fraction` 0.1) avec un TaskManager de **3 840 Mo** (tas 2 416 Mo). À 100 000
+factures, l'état tient : rattrapage complet en **environ 10 minutes** (contre > 10 h sous RocksDB). Un premier
+essai à 3 072 Mo (tas 1 836 Mo) est tombé à 91 % des pathologies sur un nouveau « Heartbeat timed out » : la VM
+était en pénurie de mémoire (swap épuisé).
+
+**Décision 3 — libérer la mémoire pendant le rattrapage** : arrêt temporaire d'AKHQ, Grafana, Prometheus,
+blackbox et Kafka Connect (~1,2 Go ; aucune donnée ne change pendant ce temps). Mémoire disponible de 1,2 Go à
+3,9 Go. Kafka Connect, Prometheus, blackbox et Grafana ont été redémarrés ensuite ; **AKHQ est resté arrêté**
+(288 Mo, inutile au flux) : `podman start pipeline_temps_reel-akhq-1` pour le remettre.
+
+**Délais RPC allongés** (`pekko.ask.timeout: 60 s`, `heartbeat.timeout: 180000`) : conservés dans le compose.
+Le premier essai RocksDB avait échoué au déploiement (« Cannot deploy task ... Ask timed out after 10000 ms »).
+Attention : les commentaires placés dans le bloc `FLINK_PROPERTIES` sont interprétés par l'entrée du conteneur
+comme des paramètres et créent des clés parasites dans `config.yaml` (sans effet, mais à sortir du bloc).
+
+**Nettoyage des tables dérivées** : les tables analytiques (14 tables KPI, `fait_*`, `qualite_anomalies`)
+contenaient des lignes périmées des essais précédents (jours antérieurs au 2026-09-07, factures supprimées) que
+Flink, qui écrit en UPSERT, ne supprime jamais. Elles ont été vidées job arrêté (sauvegarde préalable de la base
+analytique) puis reconstruites en totalité depuis Kafka. Les dimensions n'ont pas été touchées.
+
+**Incidents d'exploitation** : le script de démarrage a été lancé deux fois d'affilée (deux jobs identiques
+`kpi-continu`, doublon annulé) ; la connexion à la VM se coupe de façon répétée sous charge (messages
+« ssh handshake failed »), d'où des nouvelles tentatives automatiques dans mes commandes ; un suivi
+automatique a pris à tort l'ancien job `FAILED`, encore listé, pour un échec du job en cours.
+
+**Vérifié** (2026-09-22, ~00 h 10) : job `RUNNING` ; toutes les tables analytiques aux valeurs attendues
+(prestations 100 226, factures 100 229, prescriptions 68 271, pathologies 200 430, ententes 57 928, `fait_*`
+identiques) ; comparaison source / analytique des sections 2, 3, 4, 11 à 17 et 20 à 24 de `evaluation/` :
+**identiques** (les écarts apparents des sections 15 et 16 sont des différences de présentation, montants et
+effectifs égaux) ; section 25 : 0 doublon ; `qualite_anomalies` : 0 ligne (injection désactivée dans le simulateur).
+
+**Limite de capacité (résultat pour le chapitre 7)** : sur ce poste (VM 7 Go, disque WSL2 à écriture synchrone de
+6 ms), le pipeline traite environ **100 000 factures** en tas JVM (rattrapage en ~10 min) ; à 345 000 le tas ne
+suffit plus, et RocksDB, seule alternative testée, est inutilisable (10 h+). Un passage à l'échelle demanderait
+plus de mémoire et un disque à faible latence, non une modification du code.
+
+**Retour arrière** : restaurer `backups/echo_db_avant_purge_20260921_190243.dump` (`pg_restore`) puis refaire
+l'instantané (`docs/guides/famille_c_deploiement.md`) ; repasser à RocksDB : `state.backend.type` = `rocksdb` et
+`managed.fraction` 0.4.

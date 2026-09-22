@@ -134,3 +134,68 @@ SELECT
         ORDER BY centre_sante_code, personne_uuid)) AS empreinte
 FROM classement
 WHERE rang <= 10;
+
+\echo ''
+\echo '=== 20. Prescriptions par jour (KPI 25, famille C, H8 et H9) ==='
+SELECT
+    "DATE_DEBUT"  AS jour,
+    COUNT(*)      AS nombre_prescriptions
+FROM "TB_FACTURES_PRESCRIPTIONS"
+GROUP BY 1 ORDER BY 1;
+
+\echo ''
+\echo '=== 21. Top 10 medicaments prescrits, code + effectif (KPI 27, non masque) ==='
+SELECT
+    "PRESCRIPTION_CODE"  AS medicament_code,
+    COUNT(*)             AS nombre_prescriptions
+FROM "TB_FACTURES_PRESCRIPTIONS"
+GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10;
+
+\echo ''
+\echo '=== 22. Top 10 pathologies, code + effectif (KPI 30, non masque) ==='
+SELECT
+    "PATHOLOGIE_CODE"  AS pathologie_code,
+    COUNT(*)           AS nombre_pathologies
+FROM "TB_FACTURES_PATHOLOGIES"
+GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10;
+
+\echo ''
+\echo '=== 23. Ententes avec prescription associee, par type et statut (KPI 31, H7, non masque) ==='
+SELECT
+    COALESCE(e."TYPE_DEMANDE_CODE", '(inconnu)')  AS type_demande_code,
+    COALESCE(s."STATUT_CODE", 'sans_reponse')     AS statut_code,
+    COUNT(*)                                      AS nombre_ententes,
+    COUNT(*) FILTER (WHERE EXISTS (
+        SELECT 1 FROM "TB_FACTURES_PRESCRIPTIONS" p WHERE p."FACTURE_NUMERO" = e."FACTURE_NUMERO"
+    ))                                            AS ententes_avec_prescription
+FROM "TB_ENTENTES_PREALABLES" e
+LEFT JOIN "TB_ENTENTES_PREALABLES_STATUTS" s ON s."ENTENTE_PREALABLE_ID" = e."ENTENTE_PREALABLE_ID"
+GROUP BY 1, 2 ORDER BY 1, 2;
+
+\echo ''
+\echo '=== 24. Medicaments et pathologies portes par les ententes, par statut (KPI 32 et 33, non masque) ==='
+WITH ep AS (
+    SELECT
+        e."FACTURE_NUMERO"                         AS facture_numero,
+        COALESCE(s."STATUT_CODE", 'sans_reponse')  AS statut_code
+    FROM "TB_ENTENTES_PREALABLES" e
+    LEFT JOIN "TB_ENTENTES_PREALABLES_STATUTS" s ON s."ENTENTE_PREALABLE_ID" = e."ENTENTE_PREALABLE_ID"
+),
+presc AS (
+    SELECT ep.statut_code, COUNT(*) AS n
+    FROM ep JOIN "TB_FACTURES_PRESCRIPTIONS" p ON p."FACTURE_NUMERO" = ep.facture_numero
+    GROUP BY 1
+),
+patho AS (
+    SELECT ep.statut_code, COUNT(*) AS n
+    FROM ep JOIN "TB_FACTURES_PATHOLOGIES" g ON g."FACTURE_NUMERO" = ep.facture_numero
+    GROUP BY 1
+)
+SELECT
+    st.statut_code,
+    COALESCE(presc.n, 0)  AS nombre_medicaments_prescrits,
+    COALESCE(patho.n, 0)  AS nombre_pathologies
+FROM (SELECT DISTINCT statut_code FROM ep) st
+LEFT JOIN presc ON presc.statut_code = st.statut_code
+LEFT JOIN patho ON patho.statut_code = st.statut_code
+ORDER BY 1;
