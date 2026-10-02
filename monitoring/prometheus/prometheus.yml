@@ -39,6 +39,9 @@ scrape_configs:
           - http://superset:8088/health
           - http://grafana:3000/api/health
           - http://schema-registry:8081/subjects
+          # 2026-09-24 : canal de notification des alertes. Sa panne serait
+          # silencieuse par construction (plus aucun e-mail ne partirait).
+          - http://mailpit:8025/readyz
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

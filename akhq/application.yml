@@ -1,7 +1,25 @@
 # Config AKHQ — interface web pour voir Kafka, Schema Registry et Kafka
 # Connect en un seul endroit (topics, messages, consommateurs, schémas
 # Avro, statut des connecteurs Debezium).
+#
+# Étape 7f (2026-09-29) : page de connexion. Sans elle, quiconque atteint le
+# port 8085 lit le contenu brut des topics (donc des données nominatives
+# avant tout masquage analytique) sans identification. Compte unique
+# `sgd_admin` (outil interne SGD, jamais donné à la DPREST) ; seule
+# l'empreinte SHA-256 du mot de passe est stockée (variable .env
+# AKHQ_ADMIN_PASSWORD_SHA256, jamais le mot de passe en clair).
+micronaut:
+  security:
+    enabled: true
+
 akhq:
+  security:
+    default-group: no-roles
+    basic-auth:
+      - username: "${AKHQ_ADMIN_USER}"
+        password: "${AKHQ_ADMIN_PASSWORD_SHA256}"
+        groups:
+          - admin
   connections:
     pipeline-cluster:
       properties:

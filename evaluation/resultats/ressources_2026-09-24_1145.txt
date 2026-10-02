@@ -1,0 +1,23 @@
+podman machine ssh "free -h; nproc"  (24/09/2026 ~11:45, simulation en cours, 0,9 facture/s)
+               total        used        free      shared  buff/cache   available
+Mem:           6.8Gi       6.2Gi        93Mi       282Mi       971Mi       607Mi
+Swap:          2.0Gi       2.0Gi       168Ki
+4
+podman stats --no-stream
+simulateur_v5-postgres-1|3.63%|228.5MB
+pipeline_temps_reel-superset-db-1|0.59%|20.07MB
+pipeline_temps_reel-blackbox-exporter-1|0.30%|23.24MB
+pipeline_temps_reel-superset-redis-1|0.83%|15.91MB
+pipeline_temps_reel-prometheus-1|1.40%|136.1MB
+pipeline_temps_reel-grafana-1|1.40%|85.33MB
+pipeline_temps_reel-superset-1|1.30%|108.1MB
+pipeline_temps_reel-reverse-proxy-1|0.30%|8.098MB
+pipeline_temps_reel-postgres-analytics-1|21.56%|183.4MB
+pipeline_temps_reel-kafka-1|42.97%|593.8MB
+pipeline_temps_reel-akhq-1|1.62%|129.4MB
+pipeline_temps_reel-schema-registry-1|5.25%|233.6MB
+pipeline_temps_reel-kafka-connect-1|19.20%|999MB
+simulateur_v5-api-1|10.36%|188.3MB
+pipeline_temps_reel-flink-jobmanager-1|32.36%|458.9MB
+pipeline_temps_reel-flink-taskmanager-1|58.44%|2.903GB
+total conteneurs ~ 6,3 Go

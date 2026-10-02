@@ -10,7 +10,8 @@
 --                            -> dprest_lecture (Superset DPREST, Grafana)
 --   role_qualite_nominatif   qualite_anomalies COMPLÈTE, donnee_brute incluse.
 --                            Réservé aux comptes habilités du SGD.
---                            -> sgd_qualite
+--                            -> aucun compte de connexion depuis le 2026-10-02
+--                               (sgd_qualite supprimé ; sgd_admin lit tout)
 --   role_flink_ecriture      SELECT/INSERT/UPDATE/DELETE sur les 12 tables écrites
 --                            par le job kpi-continu, rien d'autre (fin du compte
 --                            superutilisateur dprest pour Flink).
@@ -18,7 +19,7 @@
 --
 -- Idempotent : peut être rejoué sans effet de bord. Les comptes de connexion
 -- sont créés seulement si les mots de passe sont fournis (variables psql
--- flink_pw et sgd_qualite_pw) par scripts/apply-roles-analytics.ps1 ; sur une
+-- flink_pw) par scripts/apply-roles-analytics.ps1 ; sur une
 -- base neuve initialisée par docker-entrypoint-initdb.d, seuls les groupes sont
 -- créés. Voir docs/guides/etape7d_roles.md.
 -- ---------------------------------------------------------------------------
@@ -105,15 +106,6 @@ ALTER ROLE flink_writer PASSWORD :'flink_pw';
 GRANT role_flink_ecriture TO flink_writer;
 \endif
 
-\if :{?sgd_qualite_pw}
-SELECT
-    NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sgd_qualite') AS create_sgd
-\gset
-\if :create_sgd
-CREATE ROLE sgd_qualite LOGIN PASSWORD :'sgd_qualite_pw';
-\else
-ALTER ROLE sgd_qualite PASSWORD :'sgd_qualite_pw';
-\endif
-GRANT role_qualite_nominatif TO sgd_qualite;
-GRANT role_kpi_lecture TO sgd_qualite;
-\endif
+-- 2026-10-02 : compte sgd_qualite supprimé (connexion Superset n°2 inutilisée).
+-- Les données nominatives se lisent avec le compte humain sgd_admin (DBeaver).
+-- role_qualite_nominatif est conservé comme groupe de droits (010, 013).

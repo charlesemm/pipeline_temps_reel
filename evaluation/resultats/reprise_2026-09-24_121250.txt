@@ -1,0 +1,8 @@
+mesure de reprise (2026-09-24 12:12:50)
+volume : 121326 factures, 121313 prestations dans la source
+panne du TaskManager : 60 s
+relance de la procédure : +61 s
+job de nouveau RUNNING : +134 s
+concordance exacte : +134 s
+temps de reprise (relance -> concordance) : 74 s
+plus bas relevé pendant la relecture : 121326 factures, 121313 prestations

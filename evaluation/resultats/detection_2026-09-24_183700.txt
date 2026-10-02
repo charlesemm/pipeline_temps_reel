@@ -1,0 +1,13 @@
+taux de détection des anomalies (2026-09-24 18:37:00)
+code                   injectées détectées    taux  en trop
+DOUBLON_APPROCHANT           162         0      0%        0
+MONTANT_HORS_BAREME          121         0      0%        0
+ENCODAGE_CASSE               116       116    100%        0
+TENTATIVE_INJECTION          106       106    100%        0
+MONTANT_ABERRANT             105        69     66%        0
+DOUBLON_EXACT                 91         0      0%        0
+DATE_HORS_DROITS              56         0      0%        0
+DATE_ANTIDATEE                53        44     83%       49
+QUANTITE_EXCESSIVE            53        53    100%        0
+TOTAL                        863       388     45%       49
+contrôles de complétude hors catalogue : montant_engage_negatif 16

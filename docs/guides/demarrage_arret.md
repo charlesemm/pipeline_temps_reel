@@ -124,7 +124,7 @@ podman machine ssh "ip -4 -o addr show eth0"
 | Interface | URL | Ce qu'on y fait |
 |---|---|---|
 | **Dashboard simulateur_V5** | `http://<IP_VM>:8000` | Lancer des simulations, suivre la génération de données |
-| **Flink** | `http://<IP_VM>:8082` | Voir les jobs, leur état, le nombre d'enregistrements traités, les métriques |
+| **Flink** | `http://<IP_VM>:8082` | Voir les jobs, leur état, le nombre d'enregistrements traités, les métriques — identifiants dans `.env` (`FLINK_ADMIN_USER`), mot de passe communiqué à la création (étape 7f, non stocké en clair) |
 | **Grafana** (étape 5/7) | `https://<IP_VM>:3443` | Tableau de bord de supervision, alertes — identifiants `admin` / voir `.env` (`GRAFANA_ADMIN_PASSWORD`) |
 | **Prometheus** (étape 5) | `http://<IP_VM>:9091` | Métriques brutes de Flink, état des cibles scrapées |
 | **Superset** (étape 6/7) | `https://<IP_VM>:8443` | Tableaux de bord KPI pour la DPREST — compte admin dans `.env` ; compte `dprest` en lecture seule pour un usage DPREST réel |
@@ -134,7 +134,8 @@ podman machine ssh "ip -4 -o addr show eth0"
 > accès, c'est normal, cliquer sur « Avancé » / « Continuer vers le site ». Les anciennes adresses
 > `http://<IP_VM>:3000` et `http://<IP_VM>:8088` répondent toujours en interne mais ne sont plus
 > publiées à l'extérieur du réseau Podman.
-| **AKHQ** (Kafka) | `http://<IP_VM>:8085` | Topics, contenu des messages, schémas Avro, état des connecteurs Debezium |
+| **AKHQ** (Kafka) | `http://<IP_VM>:8085` | Topics, contenu des messages, schémas Avro, état des connecteurs Debezium — identifiants dans `.env` (`AKHQ_ADMIN_USER`), mot de passe communiqué à la création (étape 7f, non stocké en clair) |
+| **Mailpit** (e-mails d'alerte) | `http://<IP_VM>:8025` | Boîte de réception des notifications Grafana (`[FIRING]` à la levée, `[RESOLVED]` à la résolution). Rien n'est envoyé hors de la machine |
 | **pgAdmin** (base KPI) | application Windows | Voir les tables KPI (paramètres dans `consulter_les_donnees.md`) |
 | Kafka Connect (API) | `http://<IP_VM>:8083` | API REST brute — utilisée par les commandes ci-dessus |
 | Schema Registry (API) | `http://<IP_VM>:8081` | Schémas Avro enregistrés |

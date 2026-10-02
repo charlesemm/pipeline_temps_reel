@@ -128,7 +128,7 @@
       "title": "État du connecteur Debezium",
       "id": 10,
       "description": "Interroge directement l'API REST de Kafka Connect. RUNNING/RUNNING attendu pour le connecteur et sa tâche. Le connecteur Avro (dprest-postgres-source) a été retiré le 2026-09-11, non utilisé par Flink — voir docs/decisions.md.",
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 6 },
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "kafka-connect-api" },
       "targets": [
         {
@@ -146,6 +146,46 @@
           ]
         }
       ]
+    },
+    {
+      "type": "stat",
+      "title": "Debezium — vue rapide",
+      "id": 14,
+      "description": "Indicateur vert/rouge en un coup d'œil, calculé sur tasks.0.state (même logique que l'alerte « Connecteur Debezium (JSON) en échec »). Complète le tableau détaillé à gauche, qui distingue état du connecteur et état de la tâche.",
+      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 6 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "kafka-connect-api" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://kafka-connect:8083/connectors/dprest-postgres-source-json/status",
+          "root_selector": "",
+          "columns": [
+            { "selector": "tasks.0.state", "text": "etat", "type": "string" }
+          ],
+          "computed_columns": [
+            { "selector": "etat == \"RUNNING\" ? 1 : 0", "text": "etat_ok" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "EN ÉCHEC", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "RUNNING", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        }
+      },
+      "options": {
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^etat_ok$/" }
+      }
     },
     {
       "type": "stat",
@@ -411,6 +451,44 @@
         }
       },
       "options": { "textMode": "value", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "row",
+      "title": "Base analytique — suivi temps réel",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
+      "id": 107,
+      "collapsed": false
+    },
+    {
+      "type": "gauge",
+      "title": "Taille de la base analytique (dprest_analytics)",
+      "id": 50,
+      "description": "pg_database_size('dprest_analytics'), rafraîchi automatiquement (10 s, réglage du dashboard) — utile pour voir la base grossir en direct pendant un rattrapage du job Flink. Seuils informatifs (orange 500 Mo, rouge 1,5 Go) à ajuster selon le volume réel observé sur ce poste ; pas d'historique de taille conservé (pg_database_size ne donne que la valeur courante, pas de série temporelle).",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 50 },
+      "datasource": { "type": "postgres", "uid": "postgres-analytics" },
+      "targets": [
+        { "format": "table", "rawSql": "SELECT pg_database_size('dprest_analytics') AS octets", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "min": 0,
+          "max": 2147483648,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 536870912 },
+              { "color": "red", "value": 1610612736 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "" },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      }
     }
   ]
 }

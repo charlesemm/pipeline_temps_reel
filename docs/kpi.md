@@ -13,6 +13,57 @@ chart dans un dashboard Superset (`DASHBOARD PRESTATIONS`, `DASHBOARD ENTENTE PR
 documentés ici. Les KPI 5, 6, 8, 14, 23 et 24 ont été retirés du présent document : leur table ou vue
 cible peut encore exister côté pipeline, mais aucun chart Superset ne les affiche actuellement.
 
+## Dashboard de synthèse DPREST (révisé le 2026-09-30)
+
+**Demande** : les deux dashboards « Prestations et facturation » et « Ententes préalables »
+totalisaient 24 graphiques — trop pour une vue de synthèse, les KPI vraiment décisifs étaient noyés
+dans les classements et ventilations secondaires. Fusionnés en un seul, `[ dashboard synthese dprest ]`
+(anciennement `[ dashboard prestation]`, id Superset 1, renommé), limité à **10 indicateurs**. Script :
+`superset/fusionner_tableaux_dprest.py`. Dashboard créé **non publié** intentionnellement, le temps
+d'une vérification visuelle (chaque chiffre contre une requête SQL de contrôle) avant de le rendre
+visible à la DPREST.
+
+**Constat en construisant ce dashboard** : l'inventaire réel des graphiques Superset (noms tels que
+créés, en majuscules) ne correspond pas à celui décrit dans `docs/guides/etape6a_superset_prestations.md`
+et `etape6b_superset_ententes.md` — ces guides décrivent une construction prévue, pas ce qui a
+effectivement été fait. Deux conséquences pour la synthèse :
+- Aucune jauge « taux de couverture CMU » ni graphique « délai moyen de traitement des EP » n'existe.
+  La mission CMU est donc représentée en repli par `REAPARTITION MONTANT PRIS EN CHARGE PAR TYPE
+  FACTURE`, seul graphique existant sur ce sujet.
+- Le tableau réglementaire mensuel `ENTENTES PREALALES MENSUELLES` (slice id 23) existait mais
+  n'était rattaché à **aucun** dashboard — invisible pour la DPREST malgré l'obligation « avant le 5
+  du mois » (CLAUDE.md). Rattaché ici en priorité : c'est l'indicateur qui reflète le mieux l'objectif
+  réglementaire du pilote, davantage qu'un classement ou une ventilation.
+Les guides `etape6a`/`etape6b` sont donc à considérer comme obsolètes pour ce qui est des noms de
+graphiques ; `superset/lister_tableaux_et_graphiques.py` (lecture seule) permet de revérifier
+l'inventaire réel à tout moment.
+
+**Critère de sélection** : un chiffre autonome et immédiatement actionnable pour la DPREST (volume,
+montant, taux), pas un classement (Top 10/20 centres/praticiens/assurés/médicaments/pathologies,
+retirés de la synthèse) ni une ventilation redondante avec un indicateur déjà retenu (par régime, par
+type de centre, par médecin-conseil, par type de demande EP : toutes secondaires par rapport à « par
+type d'actes » et « par statut », déjà présentes).
+
+| # | Graphique retenu (nom réel Superset) | Type | Rôle |
+|---|---|---|---|
+| 1 | NOMBRES DE PRESTATIONS | Big Number | volume, KPI 1 |
+| 2 | NOMBRES DE FACTURES | Big Number | passages, KPI 2/4 |
+| 3 | MONTANT TOTAL FACTURE | Big Number | KPI 3 |
+| 4 | NOMBRES D'ENTENPTES PREALABLES | Big Number | volume EP, KPI 16 |
+| 5 | TAUX DE REPONSES | Big Number | signal qualité EP, KPI 17 |
+| 6 | MONTANT ENGAGE PAR ENTENTE PREALABLE | Big Number | engagement financier EP, KPI 22 |
+| 7 | NOMBRES DE PRESTATIONS PAR TYPE D'ACTES | Pie | répartition d'activité, KPI 6 |
+| 8 | ENTENTE PREALABLE PAR STATUT | Pie | qualité de traitement EP, KPI 18 |
+| 9 | REAPARTITION MONTANT PRIS EN CHARGE PAR TYPE FACTURE | Barres | mission CMU (repli, voir constat ci-dessus) |
+| 10 | ENTENTES PREALALES MENSUELLES | Table | obligation réglementaire « avant le 5 du mois » (CLAUDE.md) |
+
+Les deux anciens dashboards ne sont pas supprimés : celui des ententes préalables (id 2) est
+dépublié (ses 8 graphiques restent consultables individuellement, menu **Charts**) ; celui des
+prestations (id 1) a été renommé en dashboard de synthèse — ses 16 graphiques d'origine, dont 6 ne
+sont plus épinglés ici (classements, KPI cliniques famille C mêlés au dashboard prestations, courbes
+de tendance), restent eux aussi consultables par **Charts**. Rien n'est supprimé ni retiré du pipeline,
+seule la vue de synthèse est resserrée à 10 indicateurs.
+
 ## Principes de calcul retenus
 
 **Granularité de base : le jour.** Flink maintient un agrégat **continu** au grain journalier : la

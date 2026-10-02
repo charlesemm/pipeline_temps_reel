@@ -1106,3 +1106,276 @@ plus de mémoire et un disque à faible latence, non une modification du code.
 **Retour arrière** : restaurer `backups/echo_db_avant_purge_20260921_190243.dump` (`pg_restore`) puis refaire
 l'instantané (`docs/guides/famille_c_deploiement.md`) ; repasser à RocksDB : `state.backend.type` = `rocksdb` et
 `managed.fraction` 0.4.
+
+## 2026-09-24 — Notifications d'alerte (Mailpit) et alertes Kafka
+
+**Constat.** Les 11 règles Grafana se déclenchaient bien, mais aucun point de contact n'était provisionné : Grafana
+utilisait son e-mail par défaut sans serveur SMTP, et les **99 notifications** envoyées avaient **toutes échoué**
+(`SMTP not configured`). Personne n'était prévenu. Par ailleurs, aucune règle ne visait le broker Kafka : sa panne
+ne se voyait qu'à travers ses effets (Debezium, Flink, fraîcheur).
+
+**Décision.**
+- Service `mailpit` (axllent/mailpit v1.31.2, open source) : reçoit les e-mails de Grafana et les conserve
+  localement (interface http://localhost:8025), sans rien relayer sur Internet — adapté à un environnement manipulant
+  des données de santé. En production : remplacer par le relais SMTP interne (variables `GF_SMTP_*` seulement).
+- `alerts.yml` : point de contact `sgd-supervision` (e-mail, levée **et** résolution), politique de routage racine
+  (regroupement par alerte, rappel toutes les 4 h).
+- 3 règles Kafka : **Kafka injoignable** (`up` × contrôleur actif, critique, 1 min), **retard de consommation Flink**
+  (> 10 000 messages pendant 5 min, avertissement ; pas de donnée = OK, le job arrêté ayant déjà sa propre alerte),
+  **volume des journaux** (> 10 Go pendant 10 min ; 1,2 Go mesuré ce jour).
+
+**Déploiement.** Grafana n'a pas de volume persistant : `grafana.db` sauvegardé
+(`backups/grafana/grafana_20260924_171508.db`) puis restauré dans le conteneur recréé (propriétaire uid 472).
+
+**Test d'incident (résultat pour le chapitre 7).** Arrêt de Kafka à 17:18:23 :
+- e-mail `[FIRING] Kafka injoignable` reçu à 17:20:06, soit **103 s** (délai = évaluation 30 s + `for` 1 min +
+  `group_wait` 30 s) ;
+- Kafka redémarré à 17:20:06, sain à 17:20:24 ; e-mail `[RESOLVED]` reçu à 17:25:10. Ce délai de ~5 min vient de
+  `group_interval: 5m` (la résolution attend le prochain cycle du groupe), non d'un défaut de détection ;
+- job Flink et connecteur Debezium restés `RUNNING`, 0 redémarrage : les clients Kafka ont repris la connexion
+  seuls après 1 min 43 d'indisponibilité. Reprise de la consommation non démontrée ce jour : le simulateur était
+  arrêté (aucun nouveau message).
+
+**Limites connues.** Alerte « Fraîcheur des KPI » levée dès que la *source* s'arrête (elle ne compare pas source et
+cible) ; alerte « Mémoire TaskManager » levée en continu (tas à 99 %) — à traiter séparément. Aucun checkpoint Flink
+observé (`completed: 0`) : l'exactly-once et la reprise sur état ne sont pas assurés en l'état.
+
+**Intégration à la stack (même jour).** Mailpit attendu « healthy » par `scripts/start-stack.ps1` et affiché dans son
+récapitulatif (port 8025) ; arrêté avec le reste par `podman compose stop` (rien à changer dans `stop-stack.ps1`) ;
+sondé par blackbox (`http://mailpit:8025/readyz`) avec une 15e règle « Mailpit (notifications) injoignable » —
+visible dans Grafana seulement, puisque c'est le canal d'envoi lui-même qui serait en panne ; ajouté au tableau
+des interfaces de `docs/guides/demarrage_arret.md`.
+
+**Retour arrière.** Retirer le service `mailpit` et les variables `GF_SMTP_*` de `docker-compose.yml`, retirer les
+blocs `contactPoints`/`policies` et les 3 règles Kafka de `alerts.yml`, puis `podman compose up -d grafana`.
+
+## 2026-09-24 — Dashboard « anomalies » ouvert à la DPREST, sans la ligne source
+
+**Constat.** Le dashboard avait été publié et `dprest_lecteur` en était devenu propriétaire (16:27). Vérifié avec ce
+compte : le dashboard s'ouvrait, mais chaque graphique était refusé (jeu `qualite_anomalies` sur la connexion
+nominative du SGD) ; deux tests de `tests/test_securite.py` échouaient (5 graphiques publiés sur la connexion SGD,
+1 objet détenu par la DPREST).
+
+**Décision.** La DPREST voit la quarantaine, pas la ligne source nominative : vue `v_qualite_anomalies`
+(`sql/analytics/011_v_qualite_anomalies.sql`, toutes les colonnes sauf `donnee_brute`, lisible par
+`role_kpi_lecture`) ; `superset/ouvrir_tableau_anomalies_dprest.py` crée le jeu sur la connexion DPREST, y rebranche
+les 5 graphiques et le filtre natif « DOMAINE », accorde l'accès au rôle `DPREST_Lecture` et rend la propriété à
+`sgd_admin`. Dashboard maintenu publié.
+
+**Vérifié.** En tant que `dprest_lecteur` : 5 graphiques servis (453 anomalies), jeu sans `donnee_brute`, ancien jeu
+nominatif refusé ; `SELECT donnee_brute FROM qualite_anomalies` refusé en base ; 22 tests réussis.
+
+**Attention.** `superset/construire_tableau_anomalies.py` reconstruit encore le tableau sur la connexion SGD et le
+dépublie : le relancer annulerait cette décision ; le rejouer doit être suivi de `ouvrir_tableau_anomalies_dprest.py`.
+
+## 2026-09-29 — Étape 7f : pages de connexion pour AKHQ et le Dashboard Flink
+
+**Constat.** Grafana et Superset ont chacun leur authentification, mais deux interfaces internes restaient ouvertes
+à quiconque atteignait leur port : AKHQ (`:8085`, lit le contenu brut des topics Kafka — donc des données
+potentiellement nominatives avant tout masquage analytique) et le Dashboard Flink (`:8082`, permet d'annuler des
+jobs). Écart identifié en reprenant le sujet « authentification par composant » du cadre légal (loi 2013-450).
+
+**Décision.**
+- **AKHQ** a une authentification native (Micronaut security) : `micronaut.security.enabled: true` +
+  `akhq.security.basic-auth` dans `akhq/application.yml`, un compte unique `sgd_admin` (groupe intégré `admin`),
+  mot de passe vérifié par une empreinte **SHA-256** (format par défaut d'AKHQ) — jamais le mot de passe en clair.
+  Identifiants injectés depuis `.env` (`AKHQ_ADMIN_USER`, `AKHQ_ADMIN_PASSWORD_SHA256`).
+- **Flink n'a pas d'authentification native.** Ajout d'un service `flink-proxy` (nginx, basic-auth) devant le
+  JobManager ; celui-ci n'est plus publié directement (son port 8081 reste interne au réseau Docker, seul le proxy
+  l'est sur 8082). Le fichier `.htpasswd` (empreinte **APR1/MD5**, générée une fois avec `openssl passwd -apr1`) est
+  écrit au démarrage du conteneur depuis les variables d'environnement, jamais versionné.
+- Le compte `sgd_admin` est un choix délibéré : ce sont des outils internes SGD (données Kafka brutes, contrôle des
+  jobs), jamais donnés à la DPREST — contrairement aux comptes Superset qui, eux, distinguent SGD et DPREST.
+
+**Piège Compose.** Le hash APR1 contient des `$` (`$apr1$sel$hash`) : Compose interpole aussi les valeurs lues
+depuis `.env`, donc `$apr1$...` était lu comme des références de variables inexistantes et tronqué. Correction :
+doubler chaque `$` en `$$` dans `.env` (`FLINK_ADMIN_PASSWORD_APR1=$$apr1$$...`) pour qu'il arrive intact jusqu'au
+conteneur.
+
+**Vérifié.** Stack démarrée : `curl` sans identifiants → 401 sur les deux interfaces ; avec les bons identifiants →
+200 (Flink) et session valide (AKHQ, `/login` puis `/api/cluster`) ; mauvais mot de passe AKHQ → rejeté. Deux tests
+ajoutés à `tests/test_securite.py` (`test_flink_dashboard_requires_auth`, `test_akhq_requires_auth`), ignorés si les
+conteneurs concernés ne tournent pas — 11/12 tests de sécurité passent.
+
+**Anomalie signalée, non corrigée ici.** `test_kafka_flink_user_is_read_only` échoue : le broker Kafka refuse le
+mot de passe `KAFKA_FLINK_PASSWORD` de `.env` pour l'utilisateur SCRAM `flink`, alors que ce compte existe bien
+(volume `kafka_data` intact, confirmé par `kafka-configs.sh --describe --entity-type users`). Aucune variable
+touchée par ce travail — problème préexistant, sans lien avec l'authentification AKHQ/Flink. À investiguer
+séparément (rotation de mot de passe non répercutée côté broker ?) avant de le corriger, puisque ça touche un
+secret Kafka en place.
+
+**Retour arrière.** Retirer le bloc `micronaut.security`/`akhq.security` de `akhq/application.yml`, retirer le
+service `flink-proxy` de `docker-compose.yml`, republier `flink-jobmanager` sur `8082:8081`, retirer les 4 variables
+`AKHQ_ADMIN_*`/`FLINK_ADMIN_*` de `.env`.
+
+## 2026-09-29 (suite) — Suppression des comptes Superset non-admin, en vue d'une recréation propre
+
+**Demande.** Ne garder dans Superset que le compte admin qui possède les dashboards (`admin`,
+`SUPERSET_ADMIN_*`) ; supprimer les comptes `sgd_admin` et `dprest_lecteur` pour les recréer proprement plus
+tard. Explicitement **hors périmètre** : les rôles PostgreSQL (`dprest_lecture`, `sgd_qualite`, `flink_writer`...)
+et tout ce qui touche à la base — seule la base de métadonnées de Superset (`superset-db`) a été modifiée.
+
+**Constat avant suppression.** `admin` co-possédait déjà la plupart des dashboards/jeux de données avec
+`sgd_admin`, sauf trois objets possédés **uniquement** par `sgd_admin` : le dashboard « anomalies » (id 3) et les
+deux jeux de données `qualite_anomalies` / `v_qualite_anomalies` (id 42/43). Les supprimer sans réassignation les
+aurait laissés sans propriétaire. `dprest_lecteur` ne possédait rien (déjà vérifié par
+`test_dprest_reader_owns_nothing_in_superset`), mais avait 435 lignes dans `logs` (journal d'activité Superset).
+
+**Exécuté (transaction SQL sur `superset-db`).**
+1. Réassigné `admin` comme copropriétaire des 3 objets qui n'avaient que `sgd_admin`.
+2. `UPDATE logs SET user_id = NULL WHERE user_id = 3` — les 435 entrées d'activité de `dprest_lecteur` sont
+   **conservées** (traçabilité), seule la référence au compte supprimé est retirée (colonne nullable).
+3. Suppression des associations de rôles (`ab_user_role`) puis des deux comptes (`ab_user`) ; les lignes de
+   copropriété restantes (`dashboard_user`, `slice_user`, `sqlatable_user`) partent en cascade.
+
+**Vérifié.** Un seul compte restant (`admin`, id 1) ; les 3 objets réassignés n'ont plus `admin` en double (doublons
+nettoyés) ; Superset toujours `healthy`, page de connexion HTTPS répond (`200`) ; suite de tests de sécurité
+inchangée par ailleurs (le test de propriété DPREST reste vacuously vrai, le compte n'existant plus).
+
+**Restant à faire (hors de cette tâche).** Recréer `sgd_admin` et `dprest_lecteur` proprement dans Superset — le
+rôle personnalisé `DPREST_Lecture` (accès restreint aux dashboards/jeux DPREST) et les connexions Superset
+existent toujours, seuls les comptes de connexion ont été retirés. `secrets/identifiants_comptes.md` mis à jour en
+conséquence (entrées barrées, mots de passe caducs).
+
+## 2026-09-30 — Fusion des dashboards Prestations et Ententes préalables en un seul, réduit à 10 KPI
+
+**Demande.** Les deux dashboards DPREST comptaient 24 graphiques au total (16 Prestations, 8
+Ententes préalables) — trop pour une vue de synthèse, les indicateurs décisifs étaient noyés dans les
+classements et ventilations secondaires.
+
+**Décision.** Fusionner les deux dashboards en un seul (`[ dashboard synthese dprest ]`), limité aux
+10 indicateurs les plus actionnables (voir `docs/kpi.md`, section « Dashboard de synthèse DPREST » pour
+la liste et le critère de sélection). Script : `superset/fusionner_tableaux_dprest.py`.
+
+**Pourquoi ce choix plutôt qu'un tri strict par famille (5 Prestations / 5 Ententes)** : le critère
+retenu est l'importance métier de chaque indicateur pris isolément (un chiffre autonome et actionnable :
+volume, montant, taux), pas un quota par famille. Le résultat final est 6 indicateurs Prestations / 4
+Ententes (voir inventaire réel ci-dessous), pas un 5/5 — la première tentative de script, basée sur les
+noms de graphiques *prévus* par `docs/guides/etape6a`/`etape6b_superset_*.md`, a échoué (les 10 noms
+attendus n'existaient pas) ; diagnostic à l'aide d'un nouveau script de lecture seule
+(`superset/lister_tableaux_et_graphiques.py`) avant de corriger la sélection sur l'inventaire réel.
+
+**Constat en corrigeant le script.** Les graphiques réellement présents dans Superset ont des noms
+différents de ceux des guides (majuscules, ex. `NOMBRES DE PRESTATIONS` au lieu de « Prestations
+totales »), et deux KPI prévus par les guides n'ont jamais été construits : pas de jauge « taux de
+couverture CMU », pas de graphique « délai moyen de traitement des EP ». La mission CMU est donc
+représentée en repli par `REAPARTITION MONTANT PRIS EN CHARGE PAR TYPE FACTURE`. Plus notable : le
+tableau réglementaire mensuel `ENTENTES PREALALES MENSUELLES` (slice id 23) existait déjà dans
+Superset mais n'était rattaché à **aucun** dashboard — invisible pour la DPREST malgré l'obligation
+« avant le 5 du mois » (CLAUDE.md). Il est rattaché ici en priorité, à la place du KPI délai manquant.
+Les guides `etape6a`/`etape6b` sont à considérer comme obsolètes sur les noms de graphiques.
+
+**Non destructif.** Aucun graphique ni jeu de données n'est supprimé. Le dashboard « Ententes
+préalables » est dépublié (pas effacé) ; le dashboard « Prestations » est renommé et voit ses slices
+remplacées par la sélection fusionnée — ses 16 graphiques d'origine restent consultables
+individuellement via le menu **Charts**. Propriétaire du dashboard fusionné : `admin`, seul compte
+Superset restant depuis la suppression de `sgd_admin`/`dprest_lecteur` (entrée du 2026-09-29
+ci-dessus) ; aucun nouveau jeu de données introduit, donc rien à ajouter au rôle `DPREST_Lecture` si
+les comptes de lecture sont recréés plus tard.
+
+## 2026-10-01 — Détail des anomalies en colonnes : vues par domaine (transitoire)
+
+**Constat.** Dans `qualite_anomalies`, la ligne source d'une anomalie n'est lisible qu'en JSON dans une seule colonne
+(`donnee_brute`) : inexploitable comme tableau (tri, filtre, export) pour le diagnostic du SGD.
+
+**Décision.** Cinq vues, une par domaine, qui éclatent `donnee_brute` en colonnes typées
+(`sql/analytics/013_v_anomalies_detail.sql`) : `v_anomalies_prestation`, `v_anomalies_facture`, `v_anomalies_agent`,
+`v_anomalies_assure`, `v_anomalies_entente_prealable`. Une vue par domaine parce que les champs diffèrent
+entièrement d'un domaine à l'autre. Lecture réservée à `role_qualite_nominatif` (SGD) : nom, numéro de sécurité
+sociale, date de naissance. La DPREST garde `v_qualite_anomalies` (sans la ligne source). Solution transitoire :
+à terme, le sink Flink sera refait pour écrire directement des tables détaillées par domaine.
+
+**Vérifié.** Comptages vue = table par domaine (prestation 68 237, assure 269, les trois autres à 0), toutes les
+colonnes converties sans erreur (`row_to_json` sur chaque ligne), aucune clé JSON non exposée ;
+`dprest_lecture` refusé sur les 5 vues, `sgd_qualite` autorisé ; 12 tests de `tests/test_securite.py` réussis
+(10 nouveaux).
+
+**Attention.**
+- Les clés lues par les vues doivent rester identiques à celles des `JSON_OBJECT` de `flink/sql/kpi_prestations.sql` :
+  une clé renommée côté Flink donnerait une colonne NULL sans erreur. Le test de cohérence ne le détecte pas.
+- `v_anomalies_facture`, `v_anomalies_agent` et `v_anomalies_entente_prealable` n'ont pas pu être vérifiées sur
+  données réelles (aucune ligne). Les conversions de date suivent les formats documentés dans le job Flink.
+- 68 237 des 75 200 prestations sont en `REPARTITION_FAUSSEE` avec `montant_rq` et `montant_assure` NULL : faux
+  positifs probables de la règle (`COALESCE(..., 0)`), visibles directement dans `v_anomalies_prestation`. À corriger
+  dans le job Flink.
+
+## 2026-10-01 (suite) — Compte Superset `dprest_lecteur` recréé : rôle Gamma manquant
+
+**Constat.** Recréé avec le seul rôle personnalisé `DPREST_Lecture`, le compte ne voyait aucun tableau de bord.
+`DPREST_Lecture` ne contient que des droits `datasource_access` (13 jeux de données) : aucun droit d'interface
+(`can_read` sur `Dashboard` et `Chart`, menu « Dashboards »). Dans Superset, ces droits viennent du rôle intégré
+**Gamma**, qui à l'inverse ne donne accès à aucune donnée.
+
+**Décision.** Rôles de `dprest_lecteur` = `Gamma` + `DPREST_Lecture` (interface + données), conformément à
+`docs/guides/etape6e_superset_clinique.md`. Pas de droits d'interface ajoutés à `DPREST_Lecture` : Gamma est
+maintenu par Superset lors des mises à jour, un rôle copié à la main ne l'est pas.
+
+**Vérifié.** Contrôle d'accès évalué par `security_manager` en tant que `dprest_lecteur` : « [ dashboard prestation] »
+accessible, 11/11 graphiques lisibles ; « [ dashboard anomalies] » accessible, 5/5 graphiques lisibles
+(`v_qualite_anomalies`, sans donnée nominative).
+
+**Retour arrière.** Retirer le rôle Gamma du compte (Paramètres → Liste des utilisateurs → Modifier).
+
+**Attention.** Tout nouveau compte DPREST doit recevoir les deux rôles. Tout nouveau jeu de données d'un tableau
+DPREST doit être ajouté à `DPREST_Lecture`, sinon le graphique correspondant reste vide pour la DPREST.
+
+## 2026-10-01 (suite 2) — Rôle `DPREST_Consultation` à la place de Gamma : pas d'accès aux jeux de données
+
+**Constat.** Avec Gamma, `dprest_lecteur` voyait le menu « Jeux de données », la liste des bases, la requête SQL
+des graphiques (*View query*) et le détail ligne à ligne (*Drill to detail*). Besoin exprimé : la DPREST ne voit que
+les tableaux de bord et les graphiques.
+
+**Décision.** Nouveau rôle `DPREST_Consultation` (41 droits) construit par liste blanche à partir de Gamma
+(`superset/creer_role_consultation_dprest.py`) : lecture des tableaux de bord et graphiques, filtres, liens de
+partage, export CSV des résultats. Retirés : tout droit sur `Dataset`, `Database`, `Datasource`, SQL Lab, *drill*,
+*view query*, exports de configuration, toute écriture (graphiques, tableaux, tags, requêtes enregistrées).
+Rôles de `dprest_lecteur` = `DPREST_Consultation` (interface) + `DPREST_Lecture` (données). Gamma n'est pas modifié :
+Superset le réécrit à chaque `superset init`.
+
+**Vérifié.** Script exécuté deux fois (idempotent, 0 droit retiré au second passage). En tant que `dprest_lecteur` :
+13 droits interdits tous refusés ; « [ dashboard prestation] » 11/11 et « [ dashboard anomalies] » 5/5 graphiques lisibles.
+
+**Retour arrière.** Réattribuer Gamma à `dprest_lecteur` et lui retirer `DPREST_Consultation`.
+
+**Attention.** Ouvrir un graphique depuis le menu « Graphiques » affiche l'éditeur (Explore) en lecture : le nom du
+jeu de données et ses colonnes y restent visibles, sans possibilité d'enregistrer. Pour le masquer aussi, retirer
+`menu_access Charts` et les droits `Explore` de la liste blanche : les graphiques ne seraient alors visibles que dans
+les tableaux de bord.
+
+## 2026-10-02 — Nettoyage des comptes : deux comptes humains, un compte par programme
+
+**Constat** (vérifié sur la stack en marche).
+- Superset : `dprest_lecteur` était propriétaire des 2 tableaux de bord et de 5 jeux de données, dont
+  `qualite_anomalies` (colonne nominative `donnee_brute`) : un propriétaire peut modifier l'objet et le voit hors de
+  ses rôles. `.env` gardait `SUPERSET_ADMIN_USER=admin` : `superset-init` aurait recréé un compte Admin `admin`.
+- Grafana : deux administrateurs (`admin`, `sgd_admin`). Sans volume sur `/var/lib/grafana`, `sgd_admin`, créé dans
+  l'interface, aurait disparu à la recréation du conteneur.
+- PostgreSQL : rôle `dprest_lecteur` orphelin (aucun objet, aucun droit direct, aucune session) ; compte
+  `sgd_qualite` utilisé par une connexion Superset sans usage (23 jeux de données, 1 graphique hors tableau, aucune
+  requête SQL Lab sur 30 jours).
+- `.env` : 4 variables périmées ou orphelines (`SGD_ADMIN_SUPERSET_PASSWORD`, `SGD_ADMIN_GRAFANA_PASSWORD`,
+  `DPREST_LECTEUR_DB_PASSWORD`, `DPREST_LECTEUR_SUPERSET_PASSWORD`).
+
+**Décision.** Deux comptes humains : `sgd_admin` (administrateur partout) et `dprest_lecteur` (Superset, lecture des
+2 tableaux). Un compte technique par programme ; jamais de compte humain dans une connexion d'outil. Le nom
+`dprest_lecteur` est conservé (et non `dprest`) pour ne pas le confondre avec le superutilisateur PostgreSQL `dprest`.
+
+**Changements.**
+- Superset : propriété transférée à `sgd_admin` (`superset/retirer_proprietes_dprest.py`, rendu compatible avec
+  `superset shell`) ; `SUPERSET_ADMIN_USER=sgd_admin`. Connexion SGD, ses 23 jeux de données et son graphique
+  supprimés (`superset/supprimer_connexion_sgd.py`).
+- Grafana : `GF_SECURITY_ADMIN_USER: sgd_admin` dans `docker-compose.yml`, `GRAFANA_ADMIN_PASSWORD` = mot de passe de
+  `sgd_admin` ; conteneur recréé, seul compte `sgd_admin` (id 1, celui que réinitialise `start-stack.ps1`).
+- PostgreSQL : `DROP ROLE dprest_lecteur`, `DROP ROLE sgd_qualite` ; `role_qualite_nominatif` conservé comme groupe
+  (010, 013). `009_roles_acces.sql` et `apply-roles-analytics.ps1` ne créent plus `sgd_qualite`.
+
+**Vérifié.** 2 tableaux DPREST, 16 graphiques, 13 jeux de données accessibles à `dprest_lecteur`, aucun de la
+connexion SGD ; `admin` refusé dans Superset et Grafana ; tableau Grafana (31 panneaux), 15 alertes et
+5 sources de données intacts ; `pytest tests/test_securite.py` : 24 réussis. Tests manuels de l'utilisateur
+(connexions `sgd_admin` et `dprest_lecteur`, absence d'édition et de SQL Lab pour la DPREST) : conformes.
+
+**Sauvegarde et retour arrière.** `backups/avant_comptes_20261002/` (chiffré GnuPG, sommes SHA-256 vérifiées) :
+rôles PostgreSQL des deux bases, base Superset, base Grafana, `.env`, export des 2 tableaux de bord.
+
+**Hors périmètre (chantier suivant).** Ports publiés sans authentification, compte Debezium dédié, minimisation de
+la capture. Voir `docs/guides/comptes_et_acces.md`, section 9.

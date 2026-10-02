@@ -20,6 +20,33 @@
 
 apiVersion: 1
 
+# Point de contact et routage — ajoutés le 2026-09-24. Jusque-là, rien
+# n'était provisionné : Grafana utilisait son point de contact par défaut
+# (e-mail sans serveur SMTP), et les 99 notifications envoyées avaient
+# toutes échoué. Les e-mails partent vers Mailpit (docker-compose.yml),
+# qui les conserve localement ; l'adresse est fictive, Mailpit accepte
+# tout destinataire. Une notification à la levée ET à la résolution.
+contactPoints:
+  - orgId: 1
+    name: sgd-supervision
+    receivers:
+      - uid: sgd-supervision-email
+        type: email
+        settings:
+          addresses: sgd-supervision@pipeline-dprest.local
+          singleEmail: true
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: sgd-supervision
+    group_by: ["grafana_folder", "alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    # Rappel toutes les 4 h tant qu'une alerte reste levée : assez pour
+    # ne pas l'oublier, sans noyer la boîte pendant une panne longue.
+    repeat_interval: 4h
+
 groups:
   - orgId: 1
     name: pipeline-dprest
@@ -321,6 +348,126 @@ groups:
             datasourceUid: prometheus
             model:
               expr: probe_success{instance="https://reverse-proxy:3443/api/health"}
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C
+
+      # ── Kafka (ajout du 2026-09-24) ─────────────────────────────────
+      # Aucune alerte ne visait le broker : une panne de Kafka ne se
+      # voyait qu'à travers ses effets (Debezium en échec, job Flink
+      # arrêté, fraîcheur), sans que rien ne désigne Kafka comme cause.
+      # Métriques de l'agent JMX (kafka/jmx-kafka.yml) et du reporter
+      # Prometheus de Flink, déjà collectées.
+
+      - uid: alerte-kafka-injoignable
+        title: "Kafka injoignable"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: critical }
+        annotations:
+          summary: "Le broker Kafka ne répond plus, ou n'a plus de contrôleur actif."
+          description: "Toute la chaîne s'arrête : Debezium ne peut plus publier les changements, Flink ne reçoit plus rien, les KPI se figent. Vérifier `podman ps` puis `podman logs pipeline_temps_reel-kafka-1`."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              # up = 0 si Prometheus ne peut plus lire l'agent JMX (broker
+              # arrêté) ; le contrôleur KRaft manquant donne 0 aussi.
+              expr: min(up{job="kafka"}) * sum(kafka_controller_activecontrollercount)
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: C
+
+      - uid: alerte-kafka-retard-consommation
+        title: "Retard de consommation Flink sur Kafka"
+        condition: C
+        for: 5m
+        # Pas de donnée = job Flink arrêté : déjà couvert par « Job Flink
+        # arrêté », inutile de lever une seconde alerte pour la même cause.
+        noDataState: OK
+        execErrState: Alerting
+        labels: { severity: warning }
+        annotations:
+          summary: "Flink a plus de 10 000 messages de retard sur un topic Kafka depuis 5 minutes."
+          description: "Les KPI ne reflètent plus l'activité récente. Normal pendant un rattrapage après resoumission du job (pic observé : 242 000 le 2026-09-24) ; anormal si le retard persiste ou grandit en régime établi."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: max(flink_taskmanager_job_task_operator_KafkaSourceReader_KafkaConsumer_records_lag_max)
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [10000] }
+              refId: C
+
+      - uid: alerte-kafka-volume-journaux
+        title: "Volume des journaux Kafka élevé"
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Alerting
+        labels: { severity: warning }
+        annotations:
+          summary: "Les journaux Kafka dépassent 10 Go."
+          description: "1,2 Go le 2026-09-24. Une croissance continue signale une rétention mal réglée ; à surveiller avant saturation du volume kafka_data."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: sum(kafka_log_size_bytes) / 1e9
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [10] }
+              refId: C
+
+      # ── Canal de notification (ajout du 2026-09-24) ──────────────────
+      - uid: alerte-mailpit-injoignable
+        title: "Mailpit (notifications) injoignable"
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels: { severity: critical }
+        annotations:
+          summary: "Le serveur e-mail des alertes ne répond plus : plus aucune notification ne part."
+          description: "Cette alerte-ci ne peut pas être envoyée par e-mail (c'est le canal en panne) : elle n'est visible que dans Grafana, rubrique Alerting. Relancer : `podman compose start mailpit`."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 120, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: probe_success{instance="http://mailpit:8025/readyz"}
               instant: true
               refId: A
           - refId: C

@@ -176,6 +176,11 @@ services:
     environment:
       JAVA_OPTS: "-Xmx256m -Xms256m"
       AKHQ_KAFKA_PASSWORD: ${KAFKA_AKHQ_PASSWORD:?KAFKA_AKHQ_PASSWORD manquant dans .env}
+      # Étape 7f : page de connexion de l'interface AKHQ elle-même (voir
+      # akhq/application.yml). Sans compte, quiconque atteint 8085 lit les
+      # messages Kafka bruts, potentiellement nominatifs.
+      AKHQ_ADMIN_USER: ${AKHQ_ADMIN_USER:?AKHQ_ADMIN_USER manquant dans .env}
+      AKHQ_ADMIN_PASSWORD_SHA256: ${AKHQ_ADMIN_PASSWORD_SHA256:?AKHQ_ADMIN_PASSWORD_SHA256 manquant dans .env}
     volumes:
       - ./akhq/application.yml:/app/application.yml:ro
     ports:
@@ -255,15 +260,39 @@ services:
         metrics.reporters: prom
         metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
         metrics.reporter.prom.port: 9249
-    ports:
-      # 8082, pas 8081 : déjà pris par schema-registry sur cette machine.
-      - "8082:8081"
+    # Étape 7f (2026-09-29) : plus de port publié directement — le Dashboard
+    # Flink n'a pas d'authentification native (quiconque atteint 8081 peut
+    # annuler des jobs). Seul flink-proxy (ci-dessous) est publié, protégé
+    # par mot de passe. Le healthcheck et start-stack.ps1 restent inchangés :
+    # ils parlent au JobManager par le réseau Docker interne, pas par 8082.
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8081/overview >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 15
       start_period: 30s
+
+  # ── Étape 7f : page de connexion pour le Flink Dashboard ──
+  # nginx en reverse proxy avec basic-auth ; c'est le seul moyen d'ajouter
+  # une authentification devant Flink, qui n'en a pas nativement.
+  flink-proxy:
+    image: docker.io/library/nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    environment:
+      FLINK_ADMIN_USER: ${FLINK_ADMIN_USER:?FLINK_ADMIN_USER manquant dans .env}
+      FLINK_ADMIN_PASSWORD_APR1: ${FLINK_ADMIN_PASSWORD_APR1:?FLINK_ADMIN_PASSWORD_APR1 manquant dans .env}
+    volumes:
+      - ./flink-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'echo "$$FLINK_ADMIN_USER:$$FLINK_ADMIN_PASSWORD_APR1" > /etc/nginx/.htpasswd && exec nginx -g "daemon off;"'
+    ports:
+      # 8082, pas 8081 : déjà pris par schema-registry sur cette machine.
+      - "8082:8081"
 
   flink-taskmanager:
     build:
@@ -352,6 +381,28 @@ services:
       retries: 10
       start_period: 10s
 
+  # ── Notifications d'alerte : serveur e-mail de démonstration ───────
+  # Ajouté le 2026-09-24 : les 99 notifications envoyées jusque-là avaient
+  # toutes échoué ("SMTP not configured") — les alertes se déclenchaient
+  # dans Grafana sans que personne ne soit prévenu. Mailpit reçoit les
+  # e-mails de Grafana et les garde (interface web, port 8025) au lieu de
+  # les relayer sur Internet : aucune donnée ne sort de la machine. En
+  # production, remplacer par le relais SMTP interne de la CNAM (seules
+  # les variables GF_SMTP_* de Grafana changent, pas les règles).
+  mailpit:
+    image: docker.io/axllent/mailpit:v1.31.2
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: "2000"
+    ports:
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   # ── Étape 5 : Grafana (tableaux de bord + alertes, public SGD) ────
   grafana:
     image: docker.io/grafana/grafana-oss:11.1.4
@@ -380,7 +431,11 @@ services:
       # figer une version est l'URL directe de téléchargement, au format
       # "<url>;<dossier_installation>" — voir /run.sh dans l'image.
       GF_INSTALL_PLUGINS: "https://grafana.com/api/plugins/yesoreyeram-infinity-datasource/versions/3.7.1/download;yesoreyeram-infinity-datasource"
-      GF_SECURITY_ADMIN_USER: admin
+      # 2026-10-02 : seul compte Grafana = sgd_admin (administrateur SGD),
+      # créé par Grafana au démarrage. Pas de volume sur /var/lib/grafana :
+      # un compte créé à la main dans l'interface disparaîtrait à la
+      # recréation du conteneur — d'où la définition ici et non à la main.
+      GF_SECURITY_ADMIN_USER: sgd_admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD manquant dans .env}
       # Étape 7 (suite) : e-mail du compte admin, appliqué seulement à la
       # création du conteneur (pas de volume persistant pour Grafana ici,
@@ -393,6 +448,14 @@ services:
       ANALYTICS_RO_PASSWORD: ${ANALYTICS_RO_PASSWORD:?ANALYTICS_RO_PASSWORD manquant dans .env}
       SOURCE_RO_PASSWORD: ${SOURCE_RO_PASSWORD:?SOURCE_RO_PASSWORD manquant dans .env}
       SUPERSET_RO_PASSWORD: ${SUPERSET_RO_PASSWORD:?SUPERSET_RO_PASSWORD manquant dans .env}
+      # Envoi des notifications d'alerte vers Mailpit (voir service
+      # ci-dessus) ; point de contact et routage dans
+      # provisioning/alerting/alerts.yml.
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: mailpit:1025
+      GF_SMTP_FROM_ADDRESS: grafana@pipeline-dprest.local
+      GF_SMTP_FROM_NAME: Supervision pipeline DPREST
+      GF_SMTP_STARTTLS_POLICY: NoStartTLS
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -466,10 +529,17 @@ services:
       SUPERSET_REDIS_HOST: superset-redis
     volumes:
       - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+    # Base superset-db persistante (volume superset_db_data) : create-admin
+    # echoue silencieusement (|| true) si le compte existe deja et NE MET PAS
+    # A JOUR son mot de passe -> un SUPERSET_ADMIN_PASSWORD change dans .env
+    # restait sans effet (meme piege que Grafana, corrige la par
+    # scripts/start-stack.ps1). La ligne `python -c` qui suit resynchronise
+    # explicitement le mot de passe a chaque demarrage.
     command: >
       bash -c "
         superset db upgrade &&
         superset fab create-admin --username ${SUPERSET_ADMIN_USER} --password ${SUPERSET_ADMIN_PASSWORD} --firstname DPREST --lastname Admin --email ${SUPERSET_ADMIN_EMAIL:?SUPERSET_ADMIN_EMAIL manquant dans .env} || true &&
+        python -c \"from superset.app import create_app; app = create_app(); ctx = app.app_context(); ctx.push(); from superset import security_manager; user = security_manager.find_user(username='${SUPERSET_ADMIN_USER}'); security_manager.reset_password(user.id, '${SUPERSET_ADMIN_PASSWORD}') if user else None\" &&
         superset init
       "
 

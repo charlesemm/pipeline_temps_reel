@@ -1,0 +1,16 @@
+﻿mesure de reprise (2026-09-24 12:45:00)
+volume : 121326 factures, 121313 prestations dans la source (figée)
+memoire VM au depart : 6934 Mo, swap 1804/2048 Mo occupes
+panne : TaskManager arrete brutalement (podman kill) a 12:45:00
+relance de la procedure (scripts/start-stack.ps1) : +61 s
+nouveau job 94e2b82a RUNNING : +141 s (12:47:20)
+releve independant des evenements relus (numRecordsOut des sources, pas de 10 s) :
+  +250 s 329460 ; +260 s 589883 ; +270 s 641194 ; +281 s 724377 ; +291 s 769704
+  +301 s 799148 ; +311 s 889796 ; +322 s 904249 ; +332 s 935030 (relecture complete)
+totaux du pipeline egaux a la source pendant toute la relecture : oui
+relecture : <= 191 s (de +141 s a +332 s) ; debit de traitement >= 4 900 evenements/s
+reprise : 271 s apres la relance (4 min 31 s), 332 s apres la panne (5 min 32 s)
+note : la sonde mesure_reprise.py v3 a lu des metriques vides (liste mise en cache avant
+leur publication, corrige depuis) ; la fin de relecture provient du releve independant ci-dessus.
+releves anterieurs du meme jour : relecture < 2 min (job a65785a6, 12:19:33 -> 12:21:25)
+et ~18 min (job 8838e5dc, 12:25:29 -> ~12:43:20, swap sature).

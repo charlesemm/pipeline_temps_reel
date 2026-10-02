@@ -1,0 +1,5 @@
+décomposition par étape (2026-09-24 11:48:31), topic dprest-json.public.TB_FACTURES
+création -> validation en source : n=381, médiane 18 ms, 95e percentile 294 ms, max 2408 ms
+validation -> lecture Debezium : n=381, médiane 281 ms, 95e percentile 504 ms, max 2398 ms
+Debezium -> Kafka : n=381, médiane 243 ms, 95e percentile 475 ms, max 2053 ms
+création -> Kafka (total amont) : n=381, médiane 566 ms, 95e percentile 994 ms, max 4571 ms

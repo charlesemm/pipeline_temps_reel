@@ -4,8 +4,8 @@
     sur la base analytique en cours d'execution.
 
 .DESCRIPTION
-    Lit FLINK_WRITER_PASSWORD et SGD_QUALITE_PASSWORD dans .env et les passe
-    a psql comme variables (jamais ecrites dans un fichier versionne).
+    Lit FLINK_WRITER_PASSWORD dans .env et le passe a psql comme variable
+    (jamais ecrit dans un fichier versionne). sgd_qualite supprime le 2026-10-02.
     Idempotent. Voir docs/guides/etape7d_roles.md.
 #>
 $ErrorActionPreference = "Continue"
@@ -21,11 +21,10 @@ function Get-EnvValue($name) {
 }
 
 $flinkPw = Get-EnvValue "FLINK_WRITER_PASSWORD"
-$sgdPw   = Get-EnvValue "SGD_QUALITE_PASSWORD"
 
 podman cp $SqlFile "${Container}:/tmp/009_roles_acces.sql"
 podman exec $Container psql -U dprest -d dprest_analytics -v ON_ERROR_STOP=1 `
-    -v "flink_pw=$flinkPw" -v "sgd_qualite_pw=$sgdPw" -f /tmp/009_roles_acces.sql
+    -v "flink_pw=$flinkPw" -f /tmp/009_roles_acces.sql
 $code = $LASTEXITCODE
 podman exec $Container rm -f /tmp/009_roles_acces.sql
 

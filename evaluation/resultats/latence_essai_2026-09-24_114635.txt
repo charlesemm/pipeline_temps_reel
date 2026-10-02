@@ -1,0 +1,8 @@
+mesure : essai (2026-09-24_114635)
+volume source au départ : 120885 factures
+factures mesurées : 39 sur 39 créées pendant 20 s (débit source moyen 1.94 factures/s)
+pas de relevé : 0.2 s (99 relevés)
+délai médian : 1.17 s
+délai moyen : 1.19 s
+95e percentile : 1.57 s
+minimum / maximum : 0.48 s / 1.58 s

@@ -1,0 +1,5 @@
+cible (source) : 121326 factures, 121313 prestations
+12:22:43 panne : TaskManager arrêté brutalement
++61 s relance : scripts/start-stack.ps1
++167 s job RUNNING
++167 s concordance des totaux : (121326, 121313)

@@ -97,11 +97,22 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Wait-Healthy "pipeline_temps_reel-kafka-1"              | Out-Null
+
+# Étape 7f : les identifiants SCRAM vivent dans le volume kafka_data, mais
+# peuvent diverger de .env (mot de passe change dans .env sans rejouer ce
+# script, ou volume recree) -> job Flink en echec avec
+# "SaslAuthenticationException: invalid credentials" au demarrage suivant.
+# Rejoue systematiquement ici : idempotent (voir kafka-secure-setup.ps1),
+# ca elimine cette classe d'incident au lieu de la diagnostiquer a chaque fois.
+Write-Step "Synchronisation des utilisateurs SCRAM Kafka avec .env"
+& "$PipelineDir\scripts\kafka-secure-setup.ps1"
+
 Wait-Healthy "pipeline_temps_reel-schema-registry-1"    | Out-Null
 Wait-Healthy "pipeline_temps_reel-kafka-connect-1"      | Out-Null
 Wait-Healthy "pipeline_temps_reel-postgres-analytics-1" | Out-Null
 Wait-Healthy "pipeline_temps_reel-flink-jobmanager-1"   | Out-Null
 Wait-Healthy "pipeline_temps_reel-prometheus-1"         | Out-Null
+Wait-Healthy "pipeline_temps_reel-mailpit-1"            | Out-Null
 Wait-Healthy "pipeline_temps_reel-grafana-1"            | Out-Null
 Wait-Healthy "pipeline_temps_reel-superset-db-1"        | Out-Null
 Wait-Healthy "pipeline_temps_reel-superset-redis-1"     | Out-Null
@@ -112,6 +123,8 @@ Wait-Healthy "pipeline_temps_reel-reverse-proxy-1"      | Out-Null
 # par variable d'environnement ne s'applique qu'a la toute premiere
 # creation de sa base -> reinitialise systematiquement pour eviter la
 # surprise "Invalid username or password" apres un redemarrage complet.
+# Utilisateur n°1 (defaut de --user-id) = sgd_admin, seul compte Grafana
+# (GF_SECURITY_ADMIN_USER dans docker-compose.yml).
 podman exec pipeline_temps_reel-grafana-1 grafana-cli admin reset-admin-password $($EnvVars['GRAFANA_ADMIN_PASSWORD']) 2>&1 | Out-Null
 
 # -- 4. Connecteurs Debezium --------------------------------------------
@@ -181,12 +194,13 @@ Write-Host " Stack demarree - IP de la VM Podman : $vmIp" -ForegroundColor Cyan
 Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Dashboard simulateur   http://${vmIp}:8000"
-Write-Host "  Flink                  http://${vmIp}:8082"
-Write-Host "  Grafana (supervision)  https://${vmIp}:3443  (admin / voir .env GRAFANA_ADMIN_PASSWORD)"
+Write-Host "  Flink                  http://${vmIp}:8082  (sgd_admin / voir .env FLINK_ADMIN_USER, mot de passe non stocke en clair)"
+Write-Host "  Grafana (supervision)  https://${vmIp}:3443  (sgd_admin / voir .env GRAFANA_ADMIN_PASSWORD)"
 Write-Host "  Superset (DPREST)      https://${vmIp}:8443  (comptes 'sgd_admin' et 'dprest_lecteur' : voir secrets/identifiants_comptes.md)"
 Write-Host "  (certificat auto-signe : le navigateur affichera un avertissement, normal - voir docs/guides/etape7_securite.md)"
 Write-Host "  Prometheus             http://${vmIp}:9091"
-Write-Host "  AKHQ (Kafka)           http://${vmIp}:8085"
+Write-Host "  AKHQ (Kafka)           http://${vmIp}:8085  (sgd_admin / voir .env AKHQ_ADMIN_USER, mot de passe non stocke en clair)"
+Write-Host "  Mailpit (e-mails)      http://${vmIp}:8025  (notifications des alertes Grafana)"
 Write-Host "  Base KPI (pgAdmin)     ${vmIp}:15433  /  dprest_analytics"
 Write-Host ""
 Write-Host "  Etat des conteneurs :"

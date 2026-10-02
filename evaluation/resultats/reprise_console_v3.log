@@ -1,0 +1,19 @@
+               total        used        free      shared  buff/cache   available
+Mem:            6934        5863         203         209        1243        1071
+Swap:           2048        1804         243
+cible (source) : 121326 factures, 121313 prestations
+événements à relire après la panne : 935030
+12:45:00 panne : TaskManager arrêté brutalement
++61 s relance : scripts/start-stack.ps1
++90 s relus : 0/935030
++121 s relus : 0/935030
++142 s job RUNNING
++142 s concordance des totaux : (121326, 121313)
++150 s relus : 0/935030
++181 s relus : 0/935030
++211 s relus : 0/935030
++241 s relus : 0/935030
++270 s relus : 0/935030
++300 s relus : 0/935030
++331 s relus : 0/935030
++360 s relus : 0/935030

@@ -1,0 +1,8 @@
+mesure : charge_normale (2026-09-24_115425)
+volume source au départ : 120946 factures
+factures mesurées : 379 sur 380 créées pendant 424 s (débit source moyen 0.90 factures/s)
+pas de relevé : 0.2 s (1344 relevés)
+délai médian : 1.31 s
+délai moyen : 1.65 s
+95e percentile : 2.06 s
+minimum / maximum : 0.40 s / 39.39 s

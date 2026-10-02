@@ -13,20 +13,19 @@ sécurité sociale, date de naissance), d'où la séparation ci-dessous.
 | Compte | Groupe de privilèges | Droits |
 |---|---|---|
 | `dprest_lecture` (Superset DPREST, Grafana) | `role_kpi_lecture` | `SELECT` sur les KPI, dimensions et vues ; sur `qualite_anomalies` **sans** `donnee_brute` |
-| `sgd_qualite` (SGD, habilité) | `role_qualite_nominatif` + `role_kpi_lecture` | idem + `donnee_brute` |
+| ~~`sgd_qualite`~~ (supprimé le 2026-10-02) | `role_qualite_nominatif` conservé sans compte de connexion | `donnee_brute` lue par `sgd_admin` (DBeaver) |
 | `flink_writer` (job `kpi-continu`) | `role_flink_ecriture` | `SELECT/INSERT/UPDATE/DELETE` sur les 12 tables qu'il alimente, rien d'autre (plus de superutilisateur) |
 | `dprest` | propriétaire | superutilisateur, réservé à l'administration |
 
-Mots de passe : `FLINK_WRITER_PASSWORD`, `SGD_QUALITE_PASSWORD` dans `.env`. Flink les reçoit à la soumission
-(placeholder `__FLINK_WRITER_PASSWORD__` remplacé par `start-stack.ps1`).
+Mot de passe : `FLINK_WRITER_PASSWORD` dans `.env`. Flink les reçoit à la soumission
+(placeholder `__FLINK_WRITER_PASSWORD__` remplacé p## Superset
 
-## Superset
+Mise à jour du 2026-10-02 : la seconde connexion « PostgreSQL analytique - qualité SGD (nominatif) » (compte
+`sgd_qualite`) a été supprimée avec ses 23 jeux de données et son unique graphique, hors de tout tableau de bord :
+aucun usage relevé (aucune requête SQL Lab sur 30 jours). Superset n'a plus qu'une connexion, `dprest_lecture`,
+sans accès à `donnee_brute`. Voir `docs/decisions.md` (2026-10-02).
 
-Une seconde connexion, « PostgreSQL analytique - qualité SGD (nominatif) », utilise `sgd_qualite`, sans
-exposition dans SQL Lab. Le tableau de qualité (guide 6c), qui affiche `donnee_brute`, doit s'appuyer sur cette
-connexion et être réservé au rôle SGD ; les tableaux DPREST restent sur la connexion `dprest_lecture`.
-**À faire à la main dans l'interface** : créer le dataset `qualite_anomalies` sur la connexion nominative et
-attribuer l'accès à un rôle SGD. À ce jour Superset ne contient que 2 datasets, aucun sur la quarantaine.
+un sur la quarantaine.
 
 ## Vérifié le 2026-09-21
 
